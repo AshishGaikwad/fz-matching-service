@@ -2,13 +2,13 @@ spring :
   application :
     name : fz-matching-service
   datasource:
-    url : jdbc:mysql://172.17.0.1:3306/frenzo_dev
-    username : root
-    password : root
+    url : jdbc:mysql://localhost:3306/frenzo_prod
+    username : appuser
+    password : Frrenzo2026$
     driver-class-name : com.mysql.cj.jdbc.Driver
   jpa :
     hibernate :
-      ddl-auto : update
+      ddl-auto : none
     show-sql : true
 
 server :
@@ -19,7 +19,7 @@ eureka :
     fetch-registry: true
     registerWithEureka: true
     serviceUrl:
-      defaultZone: http://172.17.0.1:7070/eureka/
+      defaultZone: http://localhost:7070/eureka/
   instance:
     preferIpAddress : true
 
@@ -39,9 +39,9 @@ management:
        enabled: true
 
 token:
-   access:
-     expiration: '60'
-   refresh:
-     expiration: '86400'
-   secret:
+  access:
+    expiration: 2_592_000
+  refresh:
+    expiration: 31_536_000
+  secret:
      key: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

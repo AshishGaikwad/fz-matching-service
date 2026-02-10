@@ -1,5 +1,6 @@
 package tech.grastone.fz.matching.enums;
 
 public enum Personality {
-	INTROVERT,EXTROVERT,AMBITIOUS,EMOTIONAL,CALM,CREATIVE
+    NONE, CHILL, NERDY, PARTY_ANIMAL, CALM_ZEN, CREATIVE, EXTROVERT, INTROVERT, AMBIVERT
 }
+
