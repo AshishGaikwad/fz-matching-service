@@ -61,10 +61,6 @@ public class QueryUtil {
                          FROM connections c
                          WHERE c.user_id1 = LEAST(:currentUserId, u.id)
                            AND c.user_id2 = GREATEST(:currentUserId, u.id)
-                           AND (
-                               c.is_active = 0 OR
-                               c.status = 'BLOCKED'
-                           )
                      )
                  
                      AND (
