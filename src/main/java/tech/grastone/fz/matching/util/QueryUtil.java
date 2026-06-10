@@ -53,7 +53,8 @@ public class QueryUtil {
                      AND NOT EXISTS (
                          SELECT 1
                          FROM match_request mr
-                         WHERE mr.sender_id = :currentUserId AND mr.receiver_id = u.id
+                         WHERE (mr.sender_id = :currentUserId AND mr.receiver_id = u.id) or
+                         (mr.sender_id = u.id AND mr.receiver_id = :currentUserId)
                      )
                  
                      AND NOT EXISTS (
@@ -69,7 +70,7 @@ public class QueryUtil {
                              COS(RADIANS(u.longitude) - RADIANS(:lon_rad)) +
                              SIN(RADIANS(:lat_rad)) * SIN(RADIANS(u.lattitude))
                          )
-                     ) < 300000
+                     ) < 300
                      
                   
                  
