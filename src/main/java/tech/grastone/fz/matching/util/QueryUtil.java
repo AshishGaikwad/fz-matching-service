@@ -70,7 +70,7 @@ public class QueryUtil {
                              COS(RADIANS(u.longitude) - RADIANS(:lon_rad)) +
                              SIN(RADIANS(:lat_rad)) * SIN(RADIANS(u.lattitude))
                          )
-                     ) < 300
+                     ) < 300000
                      
                   
                  
