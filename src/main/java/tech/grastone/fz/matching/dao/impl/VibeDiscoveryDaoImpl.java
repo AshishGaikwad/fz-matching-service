@@ -30,15 +30,18 @@ import tech.grastone.fz.matching.enums.UserStatus;
 @AllArgsConstructor
 public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
 
+    private static final int ZERO_KM_TEST_RADIUS_KM = 5;
+
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
     @Override
     public List<VibeCandidateRowDto> discoverCandidates(UserDto currentUser, Long sessionId, double latitude,
             double longitude, int radiusKm, Pageable pageable) {
         String preferenceTable = resolvePreferenceTable(currentUser);
-        double latDelta = radiusKm / 111.0;
+        int effectiveRadiusKm = Math.max(ZERO_KM_TEST_RADIUS_KM, radiusKm);
+        double latDelta = effectiveRadiusKm / 111.0;
         double lonBase = Math.max(0.1, Math.cos(Math.toRadians(latitude)));
-        double lonDelta = radiusKm / (111.0 * lonBase);
+        double lonDelta = effectiveRadiusKm / (111.0 * lonBase);
 
         String sql = """
                 SELECT
@@ -86,28 +89,7 @@ public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
                   AND p.user_id <> :currentUserId
                   AND p.latitude BETWEEN :minLat AND :maxLat
                   AND p.longitude BETWEEN :minLon AND :maxLon
-                  AND NOT EXISTS (
-                      SELECT 1 FROM vibe_requests vr
-                       WHERE vr.session_id = p.session_id
-                         AND vr.status IN ('PENDING', 'ACCEPTED')
-                         AND (
-                             (vr.sender_id = :currentUserId AND vr.receiver_id = p.user_id)
-                             OR (vr.sender_id = p.user_id AND vr.receiver_id = :currentUserId)
-                         )
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM vibe_connections vc
-                       WHERE vc.vibe_id = p.vibe_id
-                         AND vc.user_id1 = LEAST(:currentUserId, p.user_id)
-                         AND vc.user_id2 = GREATEST(:currentUserId, p.user_id)
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM connections c
-                       WHERE c.user_id1 = LEAST(:currentUserId, p.user_id)
-                         AND c.user_id2 = GREATEST(:currentUserId, p.user_id)
-                  )
                 HAVING distance_km <= :radiusKm
-                   AND distance_km <= radius_km
                 ORDER BY distance_km ASC, p.joined_at DESC
                 LIMIT :limit OFFSET :offset
                 """.replace("{{preferenceTable}}", preferenceTable);
@@ -117,7 +99,8 @@ public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
         params.put("currentUserId", currentUser.getId());
         params.put("latitude", latitude);
         params.put("longitude", longitude);
-        params.put("radiusKm", radiusKm);
+        params.put("radiusKm", effectiveRadiusKm);
+        params.put("zeroKmTestRadiusKm", ZERO_KM_TEST_RADIUS_KM);
         params.put("minLat", latitude - latDelta);
         params.put("maxLat", latitude + latDelta);
         params.put("minLon", longitude - lonDelta);
