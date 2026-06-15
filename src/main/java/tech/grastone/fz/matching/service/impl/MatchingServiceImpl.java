@@ -187,17 +187,22 @@ public class MatchingServiceImpl implements MatchingService {
         UserDto r = getUserDetails(receiverId);
 
         UserDto s = getUserDetails(senderId);
-        if(r.getSubscriptionPlan() == SubscriptionPlan.PREMIUM){
-            messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(receiverId).notificationTitle("You have new crush request!").notificationMessage("Hey ! "+s.getFullName()+" has seen you and sent you a request.").build());
-        }
+        messagingFeingClient.sendNotification(NotificationDto.builder()
+                .toUserId(receiverId)
+                .notificationTitle("You have a new connection request")
+                .notificationMessage(s.getFullName() + " sent you a request.")
+                .build());
 
-        // Proceed with new request
+		// Proceed with new request
 		MatchRequestEntity req = new MatchRequestEntity();
 		req.setSenderId(senderId);
 		req.setReceiverId(receiverId);
 		req.setRequestMessage(dto.getRequestMessage());
 		prepareMatchRequestEntityForCreation(req);
-		return matchRequestDao.save(req);
+		MatchRequestEntity saved = matchRequestDao.save(req);
+		log.info("Created match_request row [id={}, senderId={}, receiverId={}, status={}]",
+				saved.getMatchRequestId(), saved.getSenderId(), saved.getReceiverId(), saved.getRequestStatus());
+		return saved;
 	}
 
 	@Override

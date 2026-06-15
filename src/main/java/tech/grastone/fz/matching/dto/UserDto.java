@@ -2,11 +2,14 @@ package tech.grastone.fz.matching.dto;
 
 
 import java.time.LocalDate;
+import java.util.Set;
 
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
 import tech.grastone.fz.matching.enums.Gender;
+import tech.grastone.fz.matching.enums.LookingFor;
+import tech.grastone.fz.matching.enums.MaritalStatus;
 import tech.grastone.fz.matching.enums.Orientation;
 import tech.grastone.fz.matching.enums.SubscriptionPlan;
 import tech.grastone.fz.matching.enums.UserStatus;
@@ -24,6 +27,9 @@ public class UserDto {
     private Orientation sexualOrientation;
     private String password;
     private String bio;
+    private String profession;
+    private MaritalStatus maritalStatus;
+    private Set<LookingFor> lookingFor;
     private UserStatus status;
     private String profilePicUrl;
     private double lattitude;

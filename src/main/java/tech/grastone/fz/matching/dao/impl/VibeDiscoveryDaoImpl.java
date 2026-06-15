@@ -87,6 +87,12 @@ public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
                   AND p.status = 'ACTIVE'
                   AND p.expires_at > NOW()
                   AND p.user_id <> :currentUserId
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM connections c
+                      WHERE c.user_id1 = LEAST(:currentUserId, p.user_id)
+                        AND c.user_id2 = GREATEST(:currentUserId, p.user_id)
+                  )
                   AND p.latitude BETWEEN :minLat AND :maxLat
                   AND p.longitude BETWEEN :minLon AND :maxLon
                 HAVING distance_km <= :radiusKm

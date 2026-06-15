@@ -22,7 +22,7 @@ import tech.grastone.fz.matching.dto.VibeDiscoverDto;
 import tech.grastone.fz.matching.dto.VibeDto;
 import tech.grastone.fz.matching.dto.VibeRequestDto;
 import tech.grastone.fz.matching.dto.VibeRequestReplyDto;
-import tech.grastone.fz.matching.entity.VibeRequestEntity;
+import tech.grastone.fz.matching.entity.MatchRequestEntity;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.service.VibeService;
 
@@ -86,7 +86,7 @@ public class VibeController {
     }
 
     @PostMapping("/request")
-    public ResponseEntity<SuccessResponseHandler<VibeRequestEntity>> sendRequest(
+    public ResponseEntity<SuccessResponseHandler<MatchRequestEntity>> sendRequest(
             Authentication authentication,
             @RequestBody VibeRequestDto request) {
         Long userId = authenticatedUserId(authentication, request == null ? null : request.getSenderId());
@@ -95,7 +95,7 @@ public class VibeController {
     }
 
     @PostMapping("/request/accept")
-    public ResponseEntity<SuccessResponseHandler<VibeRequestEntity>> acceptRequest(
+    public ResponseEntity<SuccessResponseHandler<MatchRequestEntity>> acceptRequest(
             Authentication authentication,
             @RequestBody VibeRequestReplyDto request) {
         Long userId = authenticatedUserId(authentication, request == null ? null : request.getUserId());
@@ -104,7 +104,7 @@ public class VibeController {
     }
 
     @PostMapping("/request/reject")
-    public ResponseEntity<SuccessResponseHandler<VibeRequestEntity>> rejectRequest(
+    public ResponseEntity<SuccessResponseHandler<MatchRequestEntity>> rejectRequest(
             Authentication authentication,
             @RequestBody VibeRequestReplyDto request) {
         Long userId = authenticatedUserId(authentication, request == null ? null : request.getUserId());

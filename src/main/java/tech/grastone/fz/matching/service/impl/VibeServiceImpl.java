@@ -33,11 +33,11 @@ import tech.grastone.fz.matching.dto.VibeRequestReplyDto;
 import tech.grastone.fz.matching.dto.VibeSocketEventDto;
 import tech.grastone.fz.matching.entity.ActiveVibeSessionEntity;
 import tech.grastone.fz.matching.entity.ConnectionsEntity;
+import tech.grastone.fz.matching.entity.MatchRequestEntity;
 import tech.grastone.fz.matching.entity.UserImageEntity;
 import tech.grastone.fz.matching.entity.UserVibeParticipationEntity;
 import tech.grastone.fz.matching.entity.VibeConnectionEntity;
 import tech.grastone.fz.matching.entity.VibeEntity;
-import tech.grastone.fz.matching.entity.VibeRequestEntity;
 import tech.grastone.fz.matching.enums.ConnectionStatus;
 import tech.grastone.fz.matching.enums.Drinking;
 import tech.grastone.fz.matching.enums.Gender;
@@ -45,21 +45,21 @@ import tech.grastone.fz.matching.enums.Lifestyle;
 import tech.grastone.fz.matching.enums.Orientation;
 import tech.grastone.fz.matching.enums.Personality;
 import tech.grastone.fz.matching.enums.Religion;
+import tech.grastone.fz.matching.enums.RequestStatus;
 import tech.grastone.fz.matching.enums.Smoking;
 import tech.grastone.fz.matching.enums.SubscriptionPlan;
 import tech.grastone.fz.matching.enums.VibeActivityType;
 import tech.grastone.fz.matching.enums.VibeConnectionStatus;
 import tech.grastone.fz.matching.enums.VibeParticipationStatus;
-import tech.grastone.fz.matching.enums.VibeRequestStatus;
 import tech.grastone.fz.matching.enums.VibeSessionStatus;
 import tech.grastone.fz.matching.exception.DataNotFoundException;
 import tech.grastone.fz.matching.exception.ValidationException;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.repository.ActiveVibeSessionRepository;
+import tech.grastone.fz.matching.repository.MatchRequestRepository;
 import tech.grastone.fz.matching.repository.UserVibeParticipationRepository;
 import tech.grastone.fz.matching.repository.VibeConnectionRepository;
 import tech.grastone.fz.matching.repository.VibeRepository;
-import tech.grastone.fz.matching.repository.VibeRequestRepository;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.VibeService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
@@ -78,7 +78,7 @@ public class VibeServiceImpl implements VibeService {
     private final VibeRepository vibeRepository;
     private final ActiveVibeSessionRepository sessionRepository;
     private final UserVibeParticipationRepository participationRepository;
-    private final VibeRequestRepository vibeRequestRepository;
+    private final MatchRequestRepository matchRequestRepository;
     private final VibeConnectionRepository vibeConnectionRepository;
     private final VibeDiscoveryDao vibeDiscoveryDao;
     private final UserFeingClient userFeingClient;
@@ -91,9 +91,7 @@ public class VibeServiceImpl implements VibeService {
     public List<VibeDto> getVibes() {
         ensureDefaultVibes();
         expireOldParticipations();
-        return vibeRepository.findByActiveTrueOrderBySortOrderAsc().stream()
-                .map(this::toVibeDto)
-                .toList();
+        return vibeRepository.findByActiveTrueOrderBySortOrderAsc().stream().map(this::toVibeDto).toList();
     }
 
     @Override
@@ -103,8 +101,6 @@ public class VibeServiceImpl implements VibeService {
         expireOldParticipations();
         UserDto user = getUserDetails(userId);
         int radius = normalizeRadius(user, radiusKm);
-        double lat = firstNonNull(latitude, user.getLattitude());
-        double lon = firstNonNull(longitude, user.getLongitude());
 
         return vibeRepository.findByActiveTrueOrderBySortOrderAsc().stream()
                 .map(this::toVibeDto)
@@ -117,11 +113,8 @@ public class VibeServiceImpl implements VibeService {
     @Transactional
     public ActiveVibeDto getMyActiveVibe(Long userId) {
         expireOldParticipations();
-        return participationRepository
-                .findFirstByUserIdAndStatusAndExpiresAtAfterOrderByJoinedAtDesc(
-                        userId, VibeParticipationStatus.ACTIVE, LocalDateTime.now())
-                .map(this::toActiveVibeDto)
-                .orElse(null);
+        return participationRepository.findFirstByUserIdAndStatusAndExpiresAtAfterOrderByJoinedAtDesc(
+                userId, VibeParticipationStatus.ACTIVE, LocalDateTime.now()).map(this::toActiveVibeDto).orElse(null);
     }
 
     @Override
@@ -130,14 +123,12 @@ public class VibeServiceImpl implements VibeService {
         if (request == null || request.getVibeId() == null) {
             throw new ValidationException("Vibe ID is required");
         }
-
         ensureDefaultVibes();
         expireOldParticipations();
 
         UserDto user = getUserDetails(userId);
         VibeEntity vibe = vibeRepository.findByVibeIdAndActiveTrue(request.getVibeId())
                 .orElseThrow(() -> new DataNotFoundException("Vibe not found"));
-
         int radiusKm = normalizeRadius(user, request.getRadiusKm());
         int durationMinutes = normalizeDuration(user, request.getDurationMinutes(), vibe.getDefaultDurationMinutes());
         double latitude = firstNonNull(request.getLatitude(), user.getLattitude());
@@ -146,10 +137,8 @@ public class VibeServiceImpl implements VibeService {
         LocalDateTime requestedEndsAt = now.plusMinutes(durationMinutes);
 
         leaveCurrentParticipations(userId, null, now);
-
         ActiveVibeSessionEntity session = sessionRepository
-                .findFirstByVibeIdAndStatusAndEndsAtAfterOrderByEndsAtAsc(
-                        vibe.getVibeId(), VibeSessionStatus.ACTIVE, now)
+                .findFirstByVibeIdAndStatusAndEndsAtAfterOrderByEndsAtAsc(vibe.getVibeId(), VibeSessionStatus.ACTIVE, now)
                 .orElseGet(() -> createSession(vibe, now, requestedEndsAt, userId));
 
         if (session.getEndsAt().isBefore(requestedEndsAt)) {
@@ -158,10 +147,8 @@ public class VibeServiceImpl implements VibeService {
             session = sessionRepository.save(session);
         }
 
-        UserVibeParticipationEntity participation = participationRepository
-                .findByUserIdAndSessionId(userId, session.getSessionId())
+        UserVibeParticipationEntity participation = participationRepository.findByUserIdAndSessionId(userId, session.getSessionId())
                 .orElseGet(UserVibeParticipationEntity::new);
-
         participation.setUserId(userId);
         participation.setSessionId(session.getSessionId());
         participation.setVibeId(vibe.getVibeId());
@@ -177,10 +164,7 @@ public class VibeServiceImpl implements VibeService {
         participationRepository.save(participation);
 
         ActiveVibeDto activeVibe = toActiveVibeDto(participation);
-        publishVibeEvent("VIBE_JOINED", activeVibe, userId, null, Map.of(
-                "vibeName", vibe.getName(),
-                "userName", user.getFullName()
-        ));
+        publishVibeEvent("VIBE_JOINED", activeVibe, userId, null, Map.of("vibeName", vibe.getName(), "userName", user.getFullName()));
         publishVibeEvent("USER_DISCOVERED", activeVibe, userId, null, Map.of("userId", userId));
         return activeVibe;
     }
@@ -189,16 +173,12 @@ public class VibeServiceImpl implements VibeService {
     @Transactional
     public ActiveVibeDto leaveVibe(Long userId, LeaveVibeRequestDto request) {
         expireOldParticipations();
-        Long sessionId = request == null ? null : request.getSessionId();
         LocalDateTime now = LocalDateTime.now();
-        List<UserVibeParticipationEntity> participations = leaveCurrentParticipations(userId, sessionId, now);
-
+        List<UserVibeParticipationEntity> participations = leaveCurrentParticipations(userId, request == null ? null : request.getSessionId(), now);
         if (participations.isEmpty()) {
             throw new DataNotFoundException("Active vibe not found");
         }
-
-        UserVibeParticipationEntity left = participations.get(0);
-        ActiveVibeDto activeVibe = toActiveVibeDto(left);
+        ActiveVibeDto activeVibe = toActiveVibeDto(participations.get(0));
         publishVibeEvent("VIBE_LEFT", activeVibe, userId, null, Map.of("userId", userId));
         return activeVibe;
     }
@@ -212,18 +192,15 @@ public class VibeServiceImpl implements VibeService {
         VibeDto vibe = toVibeDto(getVibe(me.getVibeId()));
 
         List<VibeDiscoverDto> results = new ArrayList<>();
-        List<VibeCandidateRowDto> rows = vibeDiscoveryDao.discoverCandidates(
-                currentUser,
-                me.getSessionId(),
-                me.getLatitude(),
-                me.getLongitude(),
-                me.getRadiusKm(),
-                pageable
-        );
+        List<VibeCandidateRowDto> rows = vibeDiscoveryDao.discoverCandidates(currentUser, me.getSessionId(),
+                me.getLatitude(), me.getLongitude(), me.getRadiusKm(), pageable);
 
         for (VibeCandidateRowDto row : rows) {
             UserDto candidate = row.getUser();
             if (!isVisibleGenderForVibe(currentUser, candidate)) {
+                continue;
+            }
+            if (hasPendingMatchRequest(userId, candidate.getId())) {
                 continue;
             }
             int score = calculateCompatibility(currentUser, currentPreference, row, getVibe(me.getVibeId()));
@@ -236,119 +213,95 @@ public class VibeServiceImpl implements VibeService {
             dto.setCompatibilityPercentage(score);
             dto.setBadges(buildBadges(row.getPreference(), getVibe(me.getVibeId()), row.getDistanceKm()));
             dto.setUserImages(getUserImages(candidate.getId()));
-            dto.setRequestStatus(resolveRequestStatus(userId, candidate.getId(), row.getSessionId()));
+            dto.setRequestStatus(resolveRequestStatus(userId, candidate.getId()));
             results.add(dto);
         }
-
         return results;
     }
 
     @Override
     @Transactional
-    public VibeRequestEntity sendRequest(Long userId, VibeRequestDto request) {
+    public MatchRequestEntity sendRequest(Long userId, VibeRequestDto request) {
         if (request == null || request.getReceiverId() == null) {
             throw new ValidationException("Receiver ID is required");
         }
         if (userId.equals(request.getReceiverId())) {
             throw new ValidationException("You cannot send a vibe request to yourself");
         }
-
         UserVibeParticipationEntity me = resolveActiveParticipation(userId, request.getVibeId(), request.getSessionId());
-        participationRepository
-                .findByUserIdAndSessionIdAndStatusAndExpiresAtAfter(
-                        request.getReceiverId(), me.getSessionId(), VibeParticipationStatus.ACTIVE, LocalDateTime.now())
-                .orElseThrow(() -> new ValidationException("This user is no longer vibing"));
-
+        participationRepository.findByUserIdAndSessionIdAndStatusAndExpiresAtAfter(request.getReceiverId(), me.getSessionId(),
+                VibeParticipationStatus.ACTIVE, LocalDateTime.now()).orElseThrow(() -> new ValidationException("This user is no longer vibing"));
         assertNoExistingVibeConnection(userId, request.getReceiverId(), me.getVibeId());
 
-        Optional<VibeRequestEntity> reverse = vibeRequestRepository
-                .findFirstBySenderIdAndReceiverIdAndSessionIdAndStatus(
-                        request.getReceiverId(), userId, me.getSessionId(), VibeRequestStatus.PENDING);
+        Optional<MatchRequestEntity> reverse = matchRequestRepository.findBySenderIdAndReceiverId(request.getReceiverId(), userId)
+                .stream().filter(req -> req.getRequestStatus() == RequestStatus.PENDING).findFirst();
         if (reverse.isPresent()) {
             VibeRequestReplyDto reply = new VibeRequestReplyDto();
-            reply.setRequestId(reverse.get().getVibeRequestId());
+            reply.setRequestId(reverse.get().getMatchRequestId());
             reply.setUserId(userId);
             reply.setResponseMessage("Auto-accepted because you both started vibing.");
             return acceptRequest(userId, reply);
         }
 
-        boolean pendingExists = vibeRequestRepository
-                .findFirstBySenderIdAndReceiverIdAndSessionIdAndStatus(
-                        userId, request.getReceiverId(), me.getSessionId(), VibeRequestStatus.PENDING)
-                .isPresent();
+        boolean pendingExists = matchRequestRepository.findBySenderIdAndReceiverId(userId, request.getReceiverId()).stream()
+                .anyMatch(req -> req.getRequestStatus() == RequestStatus.PENDING);
         if (pendingExists) {
             throw new ValidationException("Vibe request is already pending");
         }
 
         UserDto sender = getUserDetails(userId);
-        UserDto receiver = getUserDetails(request.getReceiverId());
-        int compatibility = estimatePairCompatibility(sender, receiver, me);
-
-        VibeRequestEntity entity = new VibeRequestEntity();
+        MatchRequestEntity entity = new MatchRequestEntity();
         entity.setSenderId(userId);
         entity.setReceiverId(request.getReceiverId());
-        entity.setSessionId(me.getSessionId());
-        entity.setVibeId(me.getVibeId());
-        entity.setRequestMessage(limit(request.getRequestMessage(), 160));
-        entity.setCompatibilityScore(compatibility);
-        entity.setStatus(VibeRequestStatus.PENDING);
+        entity.setRequestMessage(limit(request.getRequestMessage(), 100));
+        entity.setRequestStatus(RequestStatus.PENDING);
         entity.setCreatedBy(String.valueOf(userId));
-        VibeRequestEntity saved = vibeRequestRepository.save(entity);
+        entity.setUpdatedBy(String.valueOf(userId));
+        MatchRequestEntity saved = matchRequestRepository.save(entity);
 
-        sendNotificationSafe(request.getReceiverId(), "New vibe request",
-                sender.getFullName() + " wants to start vibing with you.");
+        sendNotificationSafe(request.getReceiverId(), "Vibe ping received",
+                sender.getFullName() + " pinged you. If you ping back, we’ll lock the connection.");
         publishVibeEvent("REQUEST_SENT", toActiveVibeDto(me), userId, request.getReceiverId(), Map.of(
-                "requestId", saved.getVibeRequestId(),
+                "requestId", saved.getMatchRequestId(),
                 "senderName", sender.getFullName(),
                 "receiverId", request.getReceiverId()
         ));
-
         return saved;
     }
 
     @Override
     @Transactional
-    public VibeRequestEntity acceptRequest(Long userId, VibeRequestReplyDto request) {
-        VibeRequestEntity entity = getPendingRequestForReply(userId, request);
-        entity.setStatus(VibeRequestStatus.ACCEPTED);
-        entity.setResponseMessage(limit(request.getResponseMessage(), 160));
+    public MatchRequestEntity acceptRequest(Long userId, VibeRequestReplyDto request) {
+        MatchRequestEntity entity = getPendingMatchRequestForReply(userId, request);
+        entity.setRequestStatus(RequestStatus.ACCEPT);
+        entity.setReplyMessage(limit(request.getResponseMessage(), 100));
         entity.setUpdatedBy(String.valueOf(userId));
-        VibeRequestEntity saved = vibeRequestRepository.save(entity);
-        createVibeConnection(saved);
+        MatchRequestEntity saved = matchRequestRepository.save(entity);
         createStandardConnectionIfMissing(saved);
 
         UserDto receiver = getUserDetails(userId);
-        sendNotificationSafe(entity.getSenderId(), "Vibe accepted",
-                receiver.getFullName() + " accepted your vibe request.");
-        ActiveVibeDto active = getActiveVibeBySession(entity.getSessionId());
-        publishVibeEvent("REQUEST_ACCEPTED", active, userId, entity.getSenderId(), Map.of(
-                "requestId", saved.getVibeRequestId(),
-                "receiverName", receiver.getFullName()
-        ));
+        UserDto sender = getUserDetails(entity.getSenderId());
+        sendNotificationSafe(entity.getSenderId(), "You’re connected", receiver.getFullName() + " matched with you.");
+        sendNotificationSafe(userId, "You’re connected", sender.getFullName() + " matched with you.");
+        publishVibeEvent("REQUEST_ACCEPTED", null, userId, entity.getSenderId(), Map.of("requestId", saved.getMatchRequestId()));
         return saved;
     }
 
     @Override
     @Transactional
-    public VibeRequestEntity rejectRequest(Long userId, VibeRequestReplyDto request) {
-        VibeRequestEntity entity = getPendingRequestForReply(userId, request);
-        entity.setStatus(VibeRequestStatus.REJECTED);
-        entity.setResponseMessage(limit(request.getResponseMessage(), 160));
+    public MatchRequestEntity rejectRequest(Long userId, VibeRequestReplyDto request) {
+        MatchRequestEntity entity = getPendingMatchRequestForReply(userId, request);
+        entity.setRequestStatus(RequestStatus.REJECT);
+        entity.setReplyMessage(limit(request.getResponseMessage(), 100));
         entity.setUpdatedBy(String.valueOf(userId));
-        VibeRequestEntity saved = vibeRequestRepository.save(entity);
-        ActiveVibeDto active = getActiveVibeBySession(entity.getSessionId());
-        publishVibeEvent("REQUEST_REJECTED", active, userId, entity.getSenderId(), Map.of(
-                "requestId", saved.getVibeRequestId()
-        ));
+        MatchRequestEntity saved = matchRequestRepository.save(entity);
+        publishVibeEvent("REQUEST_REJECTED", null, userId, entity.getSenderId(), Map.of("requestId", saved.getMatchRequestId()));
         return saved;
     }
 
     private void ensureDefaultVibes() {
-        if (vibeRepository.count() > 0) {
-            return;
-        }
-
-        List<VibeEntity> defaults = List.of(
+        if (vibeRepository.count() > 0) return;
+        vibeRepository.saveAll(List.of(
                 vibe("coffee", "Coffee & Chill", "Low-pressure cafe energy for easy first conversations.", "cafe", VibeActivityType.COFFEE, 1),
                 vibe("walk", "Walk & Explore", "Find someone nearby for a light walk or city wander.", "walk", VibeActivityType.WALKING_EXPLORING, 2),
                 vibe("gaming", "Gaming Squad", "Queue up with playful people who speak fluent GG.", "game-controller", VibeActivityType.GAMING, 3),
@@ -357,9 +310,7 @@ public class VibeServiceImpl implements VibeService {
                 vibe("foodie", "Foodie Run", "Discover people ready to try the next bite nearby.", "restaurant", VibeActivityType.FOODIE, 6),
                 vibe("travel", "Travel Spark", "Connect around trips, places, and next escapes.", "airplane", VibeActivityType.TRAVEL, 7),
                 vibe("clubbing", "Club Night", "High-energy people looking for a night-out vibe.", "musical-notes", VibeActivityType.CLUBBING, 8)
-        );
-
-        vibeRepository.saveAll(defaults);
+        ));
     }
 
     private VibeEntity vibe(String code, String name, String description, String icon, VibeActivityType type, int order) {
@@ -397,15 +348,13 @@ public class VibeServiceImpl implements VibeService {
         dto.setActivityType(vibe.getActivityType());
         dto.setDefaultDurationMinutes(vibe.getDefaultDurationMinutes());
         dto.setActive(vibe.isActive());
-
-        sessionRepository.findFirstByVibeIdAndStatusAndEndsAtAfterOrderByEndsAtAsc(
-                vibe.getVibeId(), VibeSessionStatus.ACTIVE, now).ifPresent(session -> {
-            dto.setActiveSessionId(session.getSessionId());
-            dto.setEndsAt(session.getEndsAt());
-            dto.setRemainingSeconds(secondsUntil(session.getEndsAt()));
-            dto.setParticipantCount(countParticipants(session.getSessionId()));
-        });
-
+        sessionRepository.findFirstByVibeIdAndStatusAndEndsAtAfterOrderByEndsAtAsc(vibe.getVibeId(), VibeSessionStatus.ACTIVE, now)
+                .ifPresent(session -> {
+                    dto.setActiveSessionId(session.getSessionId());
+                    dto.setEndsAt(session.getEndsAt());
+                    dto.setRemainingSeconds(secondsUntil(session.getEndsAt()));
+                    dto.setParticipantCount(countParticipants(session.getSessionId()));
+                });
         return dto;
     }
 
@@ -425,90 +374,44 @@ public class VibeServiceImpl implements VibeService {
         return dto;
     }
 
-    private ActiveVibeDto getActiveVibeBySession(Long sessionId) {
-        ActiveVibeSessionEntity session = sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new DataNotFoundException("Vibe session not found"));
-        ActiveVibeDto dto = new ActiveVibeDto();
-        dto.setSessionId(sessionId);
-        dto.setVibe(toVibeDto(getVibe(session.getVibeId())));
-        dto.setJoined(false);
-        dto.setParticipantCount(countParticipants(sessionId));
-        dto.setRemainingSeconds(secondsUntil(session.getEndsAt()));
-        dto.setEndsAt(session.getEndsAt());
-        return dto;
-    }
-
     private UserVibeParticipationEntity resolveActiveParticipation(Long userId, Long vibeId, Long sessionId) {
         LocalDateTime now = LocalDateTime.now();
         if (sessionId != null) {
-            return participationRepository
-                    .findByUserIdAndSessionIdAndStatusAndExpiresAtAfter(userId, sessionId,
-                            VibeParticipationStatus.ACTIVE, now)
-                    .orElseThrow(() -> new ValidationException("Join this vibe before discovering people"));
+            return participationRepository.findByUserIdAndSessionIdAndStatusAndExpiresAtAfter(userId, sessionId,
+                    VibeParticipationStatus.ACTIVE, now).orElseThrow(() -> new ValidationException("Join this vibe before discovering people"));
         }
-
         if (vibeId != null) {
             ActiveVibeSessionEntity session = sessionRepository
                     .findFirstByVibeIdAndStatusAndEndsAtAfterOrderByEndsAtAsc(vibeId, VibeSessionStatus.ACTIVE, now)
                     .orElseThrow(() -> new ValidationException("No active session for this vibe"));
-            return participationRepository
-                    .findByUserIdAndSessionIdAndStatusAndExpiresAtAfter(userId, session.getSessionId(),
-                            VibeParticipationStatus.ACTIVE, now)
-                    .orElseThrow(() -> new ValidationException("Join this vibe before discovering people"));
+            return participationRepository.findByUserIdAndSessionIdAndStatusAndExpiresAtAfter(userId, session.getSessionId(),
+                    VibeParticipationStatus.ACTIVE, now).orElseThrow(() -> new ValidationException("Join this vibe before discovering people"));
         }
-
-        return participationRepository
-                .findFirstByUserIdAndStatusAndExpiresAtAfterOrderByJoinedAtDesc(
-                        userId, VibeParticipationStatus.ACTIVE, now)
-                .orElseThrow(() -> new ValidationException("Join a vibe before discovering people"));
+        return participationRepository.findFirstByUserIdAndStatusAndExpiresAtAfterOrderByJoinedAtDesc(userId,
+                VibeParticipationStatus.ACTIVE, now).orElseThrow(() -> new ValidationException("Join a vibe before discovering people"));
     }
 
-    private VibeRequestEntity getPendingRequestForReply(Long userId, VibeRequestReplyDto request) {
-        if (request == null || request.getRequestId() == null) {
-            throw new ValidationException("Request ID is required");
-        }
-
-        VibeRequestEntity entity = vibeRequestRepository.findById(request.getRequestId())
-                .orElseThrow(() -> new DataNotFoundException("Vibe request not found"));
-        if (!entity.getReceiverId().equals(userId)) {
-            throw new ValidationException("You can only reply to requests sent to you");
-        }
-        if (entity.getStatus() != VibeRequestStatus.PENDING) {
-            throw new ValidationException("This vibe request has already been answered");
-        }
+    private MatchRequestEntity getPendingMatchRequestForReply(Long userId, VibeRequestReplyDto request) {
+        if (request == null || request.getRequestId() == null) throw new ValidationException("Request ID is required");
+        MatchRequestEntity entity = matchRequestRepository.findById(request.getRequestId())
+                .orElseThrow(() -> new DataNotFoundException("Match request not found"));
+        if (!entity.getReceiverId().equals(userId)) throw new ValidationException("You can only reply to requests sent to you");
+        if (entity.getRequestStatus() != RequestStatus.PENDING) throw new ValidationException("This request has already been answered");
         return entity;
     }
 
-    private int calculateCompatibility(UserDto currentUser, PreferencesDto currentPreference,
-            VibeCandidateRowDto candidate, VibeEntity vibe) {
-        int score = 20; // Same active vibe is a strong signal.
+    private int calculateCompatibility(UserDto currentUser, PreferencesDto currentPreference, VibeCandidateRowDto candidate, VibeEntity vibe) {
+        int score = 20;
         score += distanceScore(candidate.getDistanceKm(), Math.min(MAX_RADIUS_KM, Math.max(1, candidate.getRadiusKm())));
         score += isMutualGenderFit(currentUser, candidate.getUser()) ? 20 : 0;
-
         PreferencesDto targetPreference = candidate.getPreference();
         score += same(currentPreference.getLifestyle(), targetPreference.getLifestyle()) ? 10 : 0;
         score += same(currentPreference.getPersonality(), targetPreference.getPersonality()) ? 10 : 0;
         score += same(currentPreference.getReligion(), targetPreference.getReligion()) ? 4 : 0;
         score += same(currentPreference.getDrinking(), targetPreference.getDrinking()) ? 3 : 0;
         score += same(currentPreference.getSmoking(), targetPreference.getSmoking()) ? 3 : 0;
-
-        if (vibe.getActivityType() == VibeActivityType.COFFEE || vibe.getActivityType() == VibeActivityType.FITNESS) {
-            score += 2;
-        }
-
+        if (vibe.getActivityType() == VibeActivityType.COFFEE || vibe.getActivityType() == VibeActivityType.FITNESS) score += 2;
         return Math.min(100, Math.max(1, score));
-    }
-
-    private int estimatePairCompatibility(UserDto sender, UserDto receiver, UserVibeParticipationEntity participation) {
-        int score = isMutualGenderFit(sender, receiver) ? 50 : 25;
-        score += distanceScore(distanceKm(sender.getLattitude(), sender.getLongitude(),
-                receiver.getLattitude(), receiver.getLongitude()), participation.getRadiusKm());
-        return Math.min(100, Math.max(1, score));
-    }
-
-    private int distanceScore(double distanceKm, int radiusKm) {
-        double normalized = Math.min(1.0, distanceKm / Math.max(1, radiusKm));
-        return (int) Math.round((1.0 - normalized) * 30);
     }
 
     private List<String> buildBadges(PreferencesDto preference, VibeEntity vibe, double distanceKm) {
@@ -525,19 +428,34 @@ public class VibeServiceImpl implements VibeService {
         return badges.stream().limit(4).toList();
     }
 
-    private String resolveRequestStatus(Long senderId, Long receiverId, Long sessionId) {
-        return vibeRequestRepository.findBySenderIdAndReceiverIdAndSessionId(senderId, receiverId, sessionId).stream()
-                .findFirst()
-                .map(req -> req.getStatus().name())
-                .orElse(null);
+    private int distanceScore(double distanceKm, int radiusKm) {
+        double normalized = Math.min(1.0, distanceKm / Math.max(1, radiusKm));
+        return (int) Math.round((1.0 - normalized) * 30);
+    }
+
+    private boolean hasPendingMatchRequest(Long userId, Long candidateId) {
+        return matchRequestRepository.findBySenderIdAndReceiverId(userId, candidateId).stream()
+                .anyMatch(req -> req.getRequestStatus() == RequestStatus.PENDING)
+                || matchRequestRepository.findBySenderIdAndReceiverId(candidateId, userId).stream()
+                .anyMatch(req -> req.getRequestStatus() == RequestStatus.PENDING);
+    }
+
+    private void assertNoExistingVibeConnection(Long senderId, Long receiverId, Long vibeId) {
+        Long userId1 = Math.min(senderId, receiverId);
+        Long userId2 = Math.max(senderId, receiverId);
+        if (vibeConnectionRepository.findByUserId1AndUserId2AndVibeId(userId1, userId2, vibeId).isPresent()) {
+            throw new ValidationException("You are already connected from this vibe");
+        }
+    }
+
+    private String resolveRequestStatus(Long senderId, Long receiverId) {
+        return matchRequestRepository.findBySenderIdAndReceiverId(senderId, receiverId).stream().findFirst()
+                .map(req -> req.getRequestStatus().name()).orElse(null);
     }
 
     private List<UserVibeParticipationEntity> leaveCurrentParticipations(Long userId, Long sessionId, LocalDateTime now) {
-        List<UserVibeParticipationEntity> active = participationRepository
-                .findByUserIdAndStatus(userId, VibeParticipationStatus.ACTIVE).stream()
-                .filter(participation -> sessionId == null || participation.getSessionId().equals(sessionId))
-                .toList();
-
+        List<UserVibeParticipationEntity> active = participationRepository.findByUserIdAndStatus(userId, VibeParticipationStatus.ACTIVE).stream()
+                .filter(participation -> sessionId == null || participation.getSessionId().equals(sessionId)).toList();
         active.forEach(participation -> {
             participation.setStatus(VibeParticipationStatus.LEFT);
             participation.setLeftAt(now);
@@ -547,31 +465,10 @@ public class VibeServiceImpl implements VibeService {
         return active;
     }
 
-    private void createVibeConnection(VibeRequestEntity request) {
+    private void createStandardConnectionIfMissing(MatchRequestEntity request) {
         Long userId1 = Math.min(request.getSenderId(), request.getReceiverId());
         Long userId2 = Math.max(request.getSenderId(), request.getReceiverId());
-        if (vibeConnectionRepository.findByUserId1AndUserId2AndVibeId(userId1, userId2, request.getVibeId()).isPresent()) {
-            return;
-        }
-
-        VibeConnectionEntity connection = new VibeConnectionEntity();
-        connection.setVibeId(request.getVibeId());
-        connection.setSessionId(request.getSessionId());
-        connection.setUserId1(userId1);
-        connection.setUserId2(userId2);
-        connection.setConnectedAt(LocalDateTime.now());
-        connection.setStatus(VibeConnectionStatus.ACTIVE);
-        connection.setCreatedBy(String.valueOf(request.getReceiverId()));
-        vibeConnectionRepository.save(connection);
-    }
-
-    private void createStandardConnectionIfMissing(VibeRequestEntity request) {
-        Long userId1 = Math.min(request.getSenderId(), request.getReceiverId());
-        Long userId2 = Math.max(request.getSenderId(), request.getReceiverId());
-        if (!connectionDao.getConnectionByUserId1AndUserId2(userId1, userId2).isEmpty()) {
-            return;
-        }
-
+        if (!connectionDao.getConnectionByUserId1AndUserId2(userId1, userId2).isEmpty()) return;
         ConnectionsEntity connection = new ConnectionsEntity();
         connection.setUserId1(userId1);
         connection.setUserId2(userId2);
@@ -584,191 +481,89 @@ public class VibeServiceImpl implements VibeService {
         connectionDao.save(connection);
     }
 
-    private void assertNoExistingVibeConnection(Long senderId, Long receiverId, Long vibeId) {
-        Long userId1 = Math.min(senderId, receiverId);
-        Long userId2 = Math.max(senderId, receiverId);
-        if (vibeConnectionRepository.findByUserId1AndUserId2AndVibeId(userId1, userId2, vibeId).isPresent()) {
-            throw new ValidationException("You are already connected from this vibe");
-        }
-    }
-
-    private boolean isMutualGenderFit(UserDto a, UserDto b) {
-        return isInterestedIn(a, b) && isInterestedIn(b, a);
-    }
-
+    private boolean isMutualGenderFit(UserDto a, UserDto b) { return isInterestedIn(a, b) && isInterestedIn(b, a); }
     private boolean isVisibleGenderForVibe(UserDto viewer, UserDto candidate) {
-        if (viewer.getGender() == null || candidate.getGender() == null) {
-            return true;
-        }
-        if (viewer.getGender() == Gender.MALE) {
-            return candidate.getGender() == Gender.FEMALE;
-        }
-        if (viewer.getGender() == Gender.FEMALE) {
-            return candidate.getGender() == Gender.MALE;
-        }
+        if (viewer.getGender() == null || candidate.getGender() == null) return true;
+        if (viewer.getGender() == Gender.MALE) return candidate.getGender() == Gender.FEMALE;
+        if (viewer.getGender() == Gender.FEMALE) return candidate.getGender() == Gender.MALE;
         return true;
     }
-
     private boolean isInterestedIn(UserDto viewer, UserDto candidate) {
-        if (viewer.getSexualOrientation() == null || viewer.getGender() == null || candidate.getGender() == null) {
-            return true;
-        }
+        if (viewer.getSexualOrientation() == null || viewer.getGender() == null || candidate.getGender() == null) return true;
         Orientation orientation = viewer.getSexualOrientation();
-        if (orientation == Orientation.GAY) {
-            return viewer.getGender() == candidate.getGender();
-        }
-        if (orientation == Orientation.LESBIAN) {
-            return candidate.getGender() == Gender.FEMALE;
-        }
-        if (orientation == Orientation.STRAIGHT) {
-            return viewer.getGender() != candidate.getGender();
-        }
+        if (orientation == Orientation.GAY) return viewer.getGender() == candidate.getGender();
+        if (orientation == Orientation.LESBIAN) return candidate.getGender() == Gender.FEMALE;
+        if (orientation == Orientation.STRAIGHT) return viewer.getGender() != candidate.getGender();
         return true;
     }
-
     private int normalizeRadius(UserDto user, Integer requestedRadius) {
         int radius = requestedRadius == null ? MAX_RADIUS_KM : requestedRadius;
         radius = Math.min(MAX_RADIUS_KM, Math.max(0, radius));
-        if (isFreeUser(user)) {
-            radius = Math.max(FREE_MIN_RADIUS_KM, radius);
-        }
-        return radius;
+        return isFreeUser(user) ? Math.max(FREE_MIN_RADIUS_KM, radius) : radius;
     }
-
     private int normalizeDuration(UserDto user, Integer requestedDuration, int defaultDuration) {
         int duration = requestedDuration == null ? defaultDuration : requestedDuration;
         int max = isFreeUser(user) ? FREE_MAX_DURATION_MINUTES : PREMIUM_MAX_DURATION_MINUTES;
         return Math.min(max, Math.max(15, duration));
     }
-
     private boolean isFreeUser(UserDto user) {
-        return user.getSubscriptionPlan() == null
-                || user.getSubscriptionPlan() == SubscriptionPlan.FREE
-                || user.getPlanExpiryDate() == null
-                || user.getPlanExpiryDate().isBefore(LocalDate.now());
+        return user.getSubscriptionPlan() == null || user.getSubscriptionPlan() == SubscriptionPlan.FREE
+                || user.getPlanExpiryDate() == null || user.getPlanExpiryDate().isBefore(LocalDate.now());
     }
-
-    private void expireOldParticipations() {
-        participationRepository.expireOldParticipations(LocalDateTime.now());
-    }
-
-    private long countParticipants(Long sessionId) {
-        return participationRepository.countBySessionIdAndStatusAndExpiresAtAfter(
-                sessionId, VibeParticipationStatus.ACTIVE, LocalDateTime.now());
-    }
-
-    private long secondsUntil(LocalDateTime endsAt) {
-        return Math.max(0, Duration.between(LocalDateTime.now(), endsAt).getSeconds());
-    }
-
-    private VibeEntity getVibe(Long vibeId) {
-        return vibeRepository.findById(vibeId)
-                .orElseThrow(() -> new DataNotFoundException("Vibe not found"));
-    }
-
+    private void expireOldParticipations() { participationRepository.expireOldParticipations(LocalDateTime.now()); }
+    private long countParticipants(Long sessionId) { return participationRepository.countBySessionIdAndStatusAndExpiresAtAfter(sessionId, VibeParticipationStatus.ACTIVE, LocalDateTime.now()); }
+    private long secondsUntil(LocalDateTime endsAt) { return Math.max(0, Duration.between(LocalDateTime.now(), endsAt).getSeconds()); }
+    private VibeEntity getVibe(Long vibeId) { return vibeRepository.findById(vibeId).orElseThrow(() -> new DataNotFoundException("Vibe not found")); }
     private UserDto getUserDetails(long userId) {
         try {
             ResponseEntity<SuccessResponseHandler<UserDto>> response = userFeingClient.getUser(userId);
             UserDto user = Optional.ofNullable(response.getBody()).map(SuccessResponseHandler::getBody).orElse(null);
-            if (user == null) {
-                throw new DataNotFoundException("User not found for ID: " + userId);
-            }
+            if (user == null) throw new DataNotFoundException("User not found for ID: " + userId);
             return user;
         } catch (Exception e) {
             log.error("Failed to fetch user details for userId: {}", userId, e);
             throw new DataNotFoundException("User not found or external service failed");
         }
     }
-
     private PreferencesDto safeGetPreference(Long userId) {
-        try {
-            return preferencesService.get(userId.intValue());
-        } catch (Exception ignored) {
-            PreferencesDto fallback = new PreferencesDto();
-            fallback.setUserId(userId);
-            fallback.setDistance(MAX_RADIUS_KM);
-            return fallback;
-        }
+        try { return preferencesService.get(userId.intValue()); }
+        catch (Exception ignored) { PreferencesDto fallback = new PreferencesDto(); fallback.setUserId(userId); fallback.setDistance(MAX_RADIUS_KM); return fallback; }
     }
-
     private List<UserImageEntity> getUserImages(long userId) {
         try {
             ResponseEntity<SuccessResponseHandler<List<UserImageEntity>>> response = userFeingClient.getUserImages(userId);
             return Optional.ofNullable(response.getBody()).map(SuccessResponseHandler::getBody).orElse(List.of());
-        } catch (Exception e) {
-            log.warn("Failed to fetch user images for userId: {}", userId);
-            return List.of();
-        }
+        } catch (Exception e) { log.warn("Failed to fetch user images for userId: {}", userId); return List.of(); }
     }
-
     private void sendNotificationSafe(Long toUserId, String title, String message) {
         try {
-            messagingFeingClient.sendNotification(NotificationDto.builder()
-                    .toUserId(toUserId)
-                    .notificationTitle(title)
-                    .notificationMessage(message)
-                    .build());
-        } catch (Exception e) {
-            log.warn("Unable to send notification to {}", toUserId);
-        }
+            messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(toUserId).notificationTitle(title).notificationMessage(message).build());
+        } catch (Exception e) { log.warn("Unable to send notification to {}", toUserId); }
     }
-
-    private void publishVibeEvent(String type, ActiveVibeDto activeVibe, Long userId, Long targetUserId,
-            Map<String, Object> payload) {
-        if (activeVibe == null) {
-            return;
-        }
+    private void publishVibeEvent(String type, ActiveVibeDto activeVibe, Long userId, Long targetUserId, Map<String, Object> payload) {
+        if (activeVibe == null) return;
         try {
-            messagingFeingClient.broadcastVibeEvent(VibeSocketEventDto.builder()
-                    .type(type)
-                    .vibeId(activeVibe.getVibe().getId())
-                    .sessionId(activeVibe.getSessionId())
-                    .userId(userId)
-                    .targetUserId(targetUserId)
-                    .participantCount(activeVibe.getParticipantCount())
-                    .remainingSeconds(activeVibe.getRemainingSeconds())
-                    .payload(payload)
-                    .build());
-        } catch (Exception e) {
-            log.warn("Unable to broadcast vibe event {}", type);
-        }
+            messagingFeingClient.broadcastVibeEvent(VibeSocketEventDto.builder().type(type).vibeId(activeVibe.getVibe().getId())
+                    .sessionId(activeVibe.getSessionId()).userId(userId).targetUserId(targetUserId)
+                    .participantCount(activeVibe.getParticipantCount()).remainingSeconds(activeVibe.getRemainingSeconds())
+                    .payload(payload).build());
+        } catch (Exception e) { log.warn("Unable to broadcast vibe event {}", type); }
     }
-
-    private double firstNonNull(Double requested, double fallback) {
-        return requested == null ? fallback : requested;
-    }
-
-    private boolean same(Object a, Object b) {
-        return a != null && a.equals(b);
-    }
-
+    private double firstNonNull(Double requested, double fallback) { return requested == null ? fallback : requested; }
+    private boolean same(Object a, Object b) { return a != null && a.equals(b); }
     private void addIfPresent(List<String> badges, Enum<?> value) {
-        if (value != null && !"NONE".equals(value.name()) && !"ANY".equals(value.name())) {
-            badges.add(label(value));
-        }
+        if (value != null && !"NONE".equals(value.name()) && !"ANY".equals(value.name())) badges.add(label(value));
     }
-
     private String label(Enum<?> value) {
-        if (value == null) {
-            return "";
-        }
+        if (value == null) return "";
         String text = value.name().toLowerCase().replace('_', ' ');
         return Character.toUpperCase(text.charAt(0)) + text.substring(1);
     }
-
-    private String limit(String value, int max) {
-        if (value == null) {
-            return null;
-        }
-        return value.length() <= max ? value : value.substring(0, max);
-    }
-
+    private String limit(String value, int max) { return value == null ? null : (value.length() <= max ? value : value.substring(0, max)); }
     private double distanceKm(double lat1, double lon1, double lat2, double lon2) {
         double dLat = Math.toRadians(lat2 - lat1);
         double dLon = Math.toRadians(lon2 - lon1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-                * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return 6371 * c;
     }
