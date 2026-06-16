@@ -39,7 +39,6 @@ import tech.grastone.fz.matching.dto.NotificationDto;
 import tech.grastone.fz.matching.dto.PreferencesDto;
 import tech.grastone.fz.matching.dto.SendMatchRequestDto;
 import tech.grastone.fz.matching.dto.UserDto;
-import tech.grastone.fz.matching.dto.VibeSocketEventDto;
 import tech.grastone.fz.matching.entity.LowkeyDiscoveryHistoryEntity;
 import tech.grastone.fz.matching.entity.LowkeySessionEntity;
 import tech.grastone.fz.matching.entity.MatchRequestEntity;
@@ -61,6 +60,7 @@ import tech.grastone.fz.matching.repository.UserLocationRepository;
 import tech.grastone.fz.matching.service.LowkeyService;
 import tech.grastone.fz.matching.service.MatchingService;
 import tech.grastone.fz.matching.service.PreferencesService;
+import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 
@@ -69,7 +69,6 @@ import tech.grastone.fz.matching.service.client.UserFeingClient;
 @Slf4j
 public class LowkeyServiceImpl implements LowkeyService {
 
-    private static final long LOWKEY_ROOM_ID = -1L;
     private static final int DEFAULT_RADIUS_KM = 25;
     private static final int MAX_RADIUS_KM = 50;
     private static final int DEFAULT_DURATION_MINUTES = 60;
@@ -87,6 +86,7 @@ public class LowkeyServiceImpl implements LowkeyService {
     private final PreferencesService preferencesService;
     private final MatchingService matchingService;
     private final ConnectionDao connectionDao;
+    private final SafetyService safetyService;
     private final LowkeyCompatibilityEngine compatibilityEngine;
     private final ObjectMapper objectMapper;
 
@@ -226,6 +226,8 @@ public class LowkeyServiceImpl implements LowkeyService {
                 box.maxLon(),
                 candidatePage
         );
+        Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+                candidates.stream().map(LowkeySessionEntity::getUserId).toList());
         Map<Long, LowkeyDiscoveryHistoryEntity> historyByCandidate = loadHistory(
                 userId,
                 candidates.stream().map(LowkeySessionEntity::getUserId).toList()
@@ -233,6 +235,9 @@ public class LowkeyServiceImpl implements LowkeyService {
 
         List<LowkeyDiscoverDto> results = new ArrayList<>();
         for (LowkeySessionEntity candidateSession : candidates) {
+            if (blockedIds.contains(candidateSession.getUserId())) {
+                continue;
+            }
             double distanceKm = distanceKm(
                     me.getLatitude(),
                     me.getLongitude(),
@@ -310,6 +315,7 @@ public class LowkeyServiceImpl implements LowkeyService {
             throw new ValidationException("Receiver ID is required");
         }
         resolveActiveSession(userId, request.getSessionId());
+        safetyService.assertNotBlocked(userId, request.getReceiverId());
 
         SendMatchRequestDto dto = new SendMatchRequestDto();
         dto.setSenderId(userId);
@@ -552,25 +558,11 @@ public class LowkeyServiceImpl implements LowkeyService {
 
     private void publishLowkeyEvent(String type, LowkeySessionEntity session, Long userId, Long targetUserId,
             Map<String, Object> payload) {
-        try {
-            long participantCount = lowkeySessionRepository.countByStatusAndExpiresAtAfter(
-                    LowkeySessionStatus.ACTIVE,
-                    LocalDateTime.now()
-            );
-            long remainingSeconds = session == null ? 0 : secondsUntil(session.getExpiresAt());
-            messagingFeingClient.broadcastVibeEvent(VibeSocketEventDto.builder()
-                    .type(type)
-                    .vibeId(LOWKEY_ROOM_ID)
-                    .sessionId(null)
-                    .userId(userId)
-                    .targetUserId(targetUserId)
-                    .participantCount(participantCount)
-                    .remainingSeconds(remainingSeconds)
-                    .payload(payload)
-                    .build());
-        } catch (Exception e) {
-            log.warn("Unable to broadcast Lowkey event {}", type);
-        }
+        log.info("Lowkey event recorded locally only: type={}, userId={}, targetUserId={}, payloadKeys={}",
+                type,
+                userId,
+                targetUserId,
+                payload == null ? List.of() : payload.keySet());
     }
 
     private int normalizeRadius(Integer requestedRadius) {

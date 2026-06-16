@@ -13,7 +13,7 @@ import tech.grastone.fz.matching.dto.UserDto;
 import tech.grastone.fz.matching.entity.UserImageEntity;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 
-@FeignClient(name= "FZ-USER-SERVICE",configuration = FeignSecurityConfig.class)
+@FeignClient(contextId = "userFeingClient", name = "FZ-USER-SERVICE", configuration = FeignSecurityConfig.class)
 public interface UserFeingClient {
 
 	@GetMapping(value = "/user/{id}",consumes = MediaType.APPLICATION_JSON_VALUE)

@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Set;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -21,6 +22,7 @@ import tech.grastone.fz.matching.enums.*;
 import tech.grastone.fz.matching.exception.*;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.service.MatchingService;
+import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
@@ -40,6 +42,7 @@ public class MatchingServiceImpl implements MatchingService {
 	private final UserMatchesDao userMatchesDao;
 	private final MatchRequestDao matchRequestDao;
 	private final ConnectionDao connectionDao;
+	private final SafetyService safetyService;
 
 	@Override
 	public List<ShowProfileDto> getMatches(long userId, Pageable pageable) {
@@ -62,11 +65,16 @@ public class MatchingServiceImpl implements MatchingService {
 
 			List<MatchedByPreferencesDto> matchedDtos = matchingDao.getMatchedUserUsingPreferences(
 					userDto, preferencesDto, pageable);
+			Set<Long> blockedDuringGeneration = safetyService.blockedUserIds(userId,
+					matchedDtos == null ? List.of() : matchedDtos.stream().map(MatchedByPreferencesDto::getUser_id).toList());
 
 			if (matchedDtos != null && !matchedDtos.isEmpty()) {
 				log.info("Found {} new matches based on preferences for userId {}", matchedDtos.size(), userId);
 				List<UserMatchesEntity> newMatches = new ArrayList<>();
 				for (MatchedByPreferencesDto dto : matchedDtos) {
+					if (blockedDuringGeneration.contains(dto.getUser_id())) {
+						continue;
+					}
 					log.debug("Creating match entry for userId {} and matchedUserId {}", userId, dto.getUser_id());
 					newMatches.add(createUserMatch(userId, dto.getUser_id()));
 				}
@@ -80,12 +88,17 @@ public class MatchingServiceImpl implements MatchingService {
 			}
 		}
 
+		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+				matchPage.getContent().stream().map(UserMatchesEntity::getUserId2).toList());
 		List<ShowProfileDto> profiles = new ArrayList<>();
 
 		if (matchPage.hasContent()) {
 			log.info("Building ShowProfileDto for {} matches", matchPage.getNumberOfElements());
 
 			matchPage.getContent().forEach(content -> {
+				if (blockedIds.contains(content.getUserId2())) {
+					return;
+				}
 				log.debug("Processing match: {}", content);
 
 				UserDto matchedUser = getUserDetails(content.getUserId2());
@@ -121,6 +134,7 @@ public class MatchingServiceImpl implements MatchingService {
 		if (match == null || match.getUserId1() != userId) {
 			throw new DataNotFoundException("Match not found or unauthorized access.");
 		}
+		safetyService.assertNotBlocked(userId, match.getUserId2());
 
 		UserDto me = getUserDetails(userId);
 		UserDto matchedUser = getUserDetails(match.getUserId2());
@@ -150,6 +164,7 @@ public class MatchingServiceImpl implements MatchingService {
 		validateIds(dto.getSenderId(), dto.getReceiverId());
 		log.info("Sending match request: {} -> {}", dto.getSenderId(), dto.getReceiverId());
 
+		safetyService.assertNotBlocked(dto.getSenderId(), dto.getReceiverId());
 		assertNoExistingConnection(dto.getSenderId(), dto.getReceiverId());
 
 		Long senderId = dto.getSenderId();
@@ -249,8 +264,13 @@ public class MatchingServiceImpl implements MatchingService {
 
 		List<ShowProfileDto> profiles = new ArrayList<>();
 
+		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+				matchPage.getContent().stream().map(MatchRequestEntity::getReceiverId).toList());
 		if(matchPage.hasContent() ){
 			matchPage.getContent().stream().forEach((content)->{
+				if (blockedIds.contains(content.getReceiverId())) {
+					return;
+				}
 				List<UserImageEntity> userImagesList = getUserImages(content.getReceiverId());
 				UserDto matchedUser = getUserDetails(content.getReceiverId());
 				ShowProfileDto profile = new ShowProfileDto();
@@ -283,8 +303,13 @@ public class MatchingServiceImpl implements MatchingService {
 
 		List<ShowProfileDto> profiles = new ArrayList<>();
 
+		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+				matchPage.getContent().stream().map(MatchRequestEntity::getSenderId).toList());
 		if(matchPage.hasContent() ){
 			matchPage.getContent().stream().forEach((content)->{
+				if (blockedIds.contains(content.getSenderId())) {
+					return;
+				}
 				List<UserImageEntity> userImagesList = getUserImages(content.getSenderId());
 				UserDto matchedUser = getUserDetails(content.getSenderId());
 				ShowProfileDto profile = new ShowProfileDto();

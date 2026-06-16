@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,7 +37,7 @@ public class LowkeyController {
 
     @GetMapping("/me")
     public ResponseEntity<SuccessResponseHandler<LowkeySessionDto>> getMySession(Authentication authentication) {
-        Long userId = authenticatedUserId(authentication, null);
+        Long userId = authenticatedUserId(authentication);
         log.info("[Lowkey] GET /me requested by userId={}", userId);
         return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Lowkey session fetched",
                 lowkeyService.getMySession(userId)));
@@ -45,7 +47,7 @@ public class LowkeyController {
     public ResponseEntity<SuccessResponseHandler<LowkeySessionDto>> enter(
             Authentication authentication,
             @RequestBody LowkeyEnterRequestDto request) {
-        Long userId = authenticatedUserId(authentication, request == null ? null : request.getUserId());
+        Long userId = authenticatedUserId(authentication);
         log.info("[Lowkey] POST /enter userId={} authPrincipal={} request={}", userId,
                 authentication == null ? null : authentication.getName(), request);
         return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Entered Lowkey",
@@ -56,7 +58,7 @@ public class LowkeyController {
     public ResponseEntity<SuccessResponseHandler<LowkeySessionDto>> updateLocation(
             Authentication authentication,
             @RequestBody LowkeyLocationUpdateRequestDto request) {
-        Long userId = authenticatedUserId(authentication, request == null ? null : request.getUserId());
+        Long userId = authenticatedUserId(authentication);
         log.info("[Lowkey] POST /location userId={} authPrincipal={} request={}", userId,
                 authentication == null ? null : authentication.getName(), request);
         return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Lowkey location updated",
@@ -67,7 +69,7 @@ public class LowkeyController {
     public ResponseEntity<SuccessResponseHandler<LowkeySessionDto>> leave(
             Authentication authentication,
             @RequestBody LowkeyLeaveRequestDto request) {
-        Long userId = authenticatedUserId(authentication, request == null ? null : request.getUserId());
+        Long userId = authenticatedUserId(authentication);
         log.info("[Lowkey] POST /leave userId={} authPrincipal={} request={}", userId,
                 authentication == null ? null : authentication.getName(), request);
         return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Left Lowkey",
@@ -79,7 +81,7 @@ public class LowkeyController {
             Authentication authentication,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Long userId = authenticatedUserId(authentication, null);
+        Long userId = authenticatedUserId(authentication);
         Pageable pageable = PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 50)));
         log.info("[Lowkey] GET /discover userId={} authPrincipal={} page={} size={}", userId,
                 authentication == null ? null : authentication.getName(), page, size);
@@ -91,20 +93,24 @@ public class LowkeyController {
     public ResponseEntity<SuccessResponseHandler<MatchRequestEntity>> sendRequest(
             Authentication authentication,
             @RequestBody LowkeyRequestDto request) {
-        Long userId = authenticatedUserId(authentication, request == null ? null : request.getSenderId());
+        Long userId = authenticatedUserId(authentication);
         log.info("[Lowkey] POST /request senderId={} authPrincipal={} request={}", userId,
                 authentication == null ? null : authentication.getName(), request);
         return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Lowkey request sent",
                 lowkeyService.sendRequest(userId, request)));
     }
 
-    private Long authenticatedUserId(Authentication authentication, Long fallbackUserId) {
+    private Long authenticatedUserId(Authentication authentication) {
         if (authentication != null && authentication.getPrincipal() != null) {
-            Long parsedUserId = Long.parseLong(authentication.getPrincipal().toString());
-            log.debug("[Lowkey] authenticatedUserId resolved from security context: {}", parsedUserId);
-            return parsedUserId;
+            try {
+                Long parsedUserId = Long.parseLong(authentication.getPrincipal().toString());
+                log.debug("[Lowkey] authenticatedUserId resolved from security context: {}", parsedUserId);
+                return parsedUserId;
+            } catch (NumberFormatException ex) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid authentication principal");
+            }
         }
-        log.debug("[Lowkey] authenticatedUserId falling back to request body value: {}", fallbackUserId);
-        return fallbackUserId;
+
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
     }
 }

@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.Pageable;
@@ -61,6 +62,7 @@ import tech.grastone.fz.matching.repository.UserVibeParticipationRepository;
 import tech.grastone.fz.matching.repository.VibeConnectionRepository;
 import tech.grastone.fz.matching.repository.VibeRepository;
 import tech.grastone.fz.matching.service.PreferencesService;
+import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.VibeService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
@@ -85,6 +87,7 @@ public class VibeServiceImpl implements VibeService {
     private final MessagingFeingClient messagingFeingClient;
     private final PreferencesService preferencesService;
     private final ConnectionDao connectionDao;
+    private final SafetyService safetyService;
 
     @Override
     @Transactional
@@ -194,10 +197,18 @@ public class VibeServiceImpl implements VibeService {
         List<VibeDiscoverDto> results = new ArrayList<>();
         List<VibeCandidateRowDto> rows = vibeDiscoveryDao.discoverCandidates(currentUser, me.getSessionId(),
                 me.getLatitude(), me.getLongitude(), me.getRadiusKm(), pageable);
+        Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+                rows.stream().map(row -> row.getUser().getId()).toList());
 
         for (VibeCandidateRowDto row : rows) {
             UserDto candidate = row.getUser();
+            if (blockedIds.contains(candidate.getId())) {
+                continue;
+            }
             if (!isVisibleGenderForVibe(currentUser, candidate)) {
+                continue;
+            }
+            if (hasExistingConnection(userId, candidate.getId())) {
                 continue;
             }
             if (hasPendingMatchRequest(userId, candidate.getId())) {
@@ -225,6 +236,7 @@ public class VibeServiceImpl implements VibeService {
         if (request == null || request.getReceiverId() == null) {
             throw new ValidationException("Receiver ID is required");
         }
+        safetyService.assertNotBlocked(userId, request.getReceiverId());
         if (userId.equals(request.getReceiverId())) {
             throw new ValidationException("You cannot send a vibe request to yourself");
         }
@@ -273,6 +285,7 @@ public class VibeServiceImpl implements VibeService {
     @Transactional
     public MatchRequestEntity acceptRequest(Long userId, VibeRequestReplyDto request) {
         MatchRequestEntity entity = getPendingMatchRequestForReply(userId, request);
+        safetyService.assertNotBlocked(userId, entity.getSenderId());
         entity.setRequestStatus(RequestStatus.ACCEPT);
         entity.setReplyMessage(limit(request.getResponseMessage(), 100));
         entity.setUpdatedBy(String.valueOf(userId));
@@ -291,6 +304,7 @@ public class VibeServiceImpl implements VibeService {
     @Transactional
     public MatchRequestEntity rejectRequest(Long userId, VibeRequestReplyDto request) {
         MatchRequestEntity entity = getPendingMatchRequestForReply(userId, request);
+        safetyService.assertNotBlocked(userId, entity.getSenderId());
         entity.setRequestStatus(RequestStatus.REJECT);
         entity.setReplyMessage(limit(request.getResponseMessage(), 100));
         entity.setUpdatedBy(String.valueOf(userId));
@@ -438,6 +452,13 @@ public class VibeServiceImpl implements VibeService {
                 .anyMatch(req -> req.getRequestStatus() == RequestStatus.PENDING)
                 || matchRequestRepository.findBySenderIdAndReceiverId(candidateId, userId).stream()
                 .anyMatch(req -> req.getRequestStatus() == RequestStatus.PENDING);
+    }
+
+    private boolean hasExistingConnection(Long userId, Long candidateId) {
+        Long userId1 = Math.min(userId, candidateId);
+        Long userId2 = Math.max(userId, candidateId);
+        return connectionDao.getConnectionByUserId1AndUserId2(userId1, userId2).stream()
+                .anyMatch(connection -> connection.isActive());
     }
 
     private void assertNoExistingVibeConnection(Long senderId, Long receiverId, Long vibeId) {

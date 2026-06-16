@@ -1,6 +1,9 @@
 package tech.grastone.fz.matching.service.impl;
 
+import java.util.LinkedHashSet;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -15,7 +18,9 @@ import tech.grastone.fz.matching.entity.PreferencesGayEntity;
 import tech.grastone.fz.matching.entity.PreferencesLesbianEntity;
 import tech.grastone.fz.matching.entity.PreferencesMenEntity;
 import tech.grastone.fz.matching.entity.PreferencesWomenEntity;
+import tech.grastone.fz.matching.entity.base.BasePreferenceEntity;
 import tech.grastone.fz.matching.enums.Gender;
+import tech.grastone.fz.matching.enums.LookingFor;
 import tech.grastone.fz.matching.exception.DataNotFoundException;
 import tech.grastone.fz.matching.exception.ValidationException;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
@@ -50,27 +55,28 @@ public class PreferencesServiceImpl implements PreferencesService {
 	public PreferencesDto save(PreferencesDto preferencesDto) {
 		log.info("Saving preferences for userId: {}", preferencesDto.getUserId());
 		UserDto userDto = getUserDetails(preferencesDto.getUserId());
+		PreferencesDto normalized = normalizePreferences(preferencesDto, userDto);
 
-		Object result = null;
+		BasePreferenceEntity result = null;
 		switch (userDto.getSexualOrientation()) {
 			case STRAIGHT: {
 				if (userDto.getGender() == Gender.MALE) {
 					log.debug("User is STRAIGHT MALE, using PreferencesMenDao");
-					result = preferenceMenDao.save(modelMapper.map(preferencesDto, PreferencesMenEntity.class));
+					result = savePreferences(normalized, PreferencesMenEntity.class, preferenceMenDao);
 				} else if (userDto.getGender() == Gender.FEMALE) {
 					log.debug("User is STRAIGHT FEMALE, using PreferencesWomenDao");
-					result = preferenceWomenDao.save(modelMapper.map(preferencesDto, PreferencesWomenEntity.class));
+					result = savePreferences(normalized, PreferencesWomenEntity.class, preferenceWomenDao);
 				}
 				break;
 			}
 			case GAY: {
 				log.debug("User is GAY, using PreferencesGayDao");
-				result = preferenceGayDao.save(modelMapper.map(preferencesDto, PreferencesGayEntity.class));
+				result = savePreferences(normalized, PreferencesGayEntity.class, preferenceGayDao);
 				break;
 			}
 			case LESBIAN: {
 				log.debug("User is LESBIAN, using PreferencesLesbianDao");
-				result = preferenceLesbianDao.save(modelMapper.map(preferencesDto, PreferencesLesbianEntity.class));
+				result = savePreferences(normalized, PreferencesLesbianEntity.class, preferenceLesbianDao);
 				break;
 			}
 			default:
@@ -79,7 +85,7 @@ public class PreferencesServiceImpl implements PreferencesService {
 		}
 
 		log.info("Preferences saved successfully for userId: {}", preferencesDto.getUserId());
-		return modelMapper.map(result, PreferencesDto.class);
+		return toDto(result, userDto);
 	}
 
 	private UserDto getUserDetails(long userId) {
@@ -133,6 +139,106 @@ public class PreferencesServiceImpl implements PreferencesService {
 		}
 
 		log.info("Preferences fetched successfully for userId: {}", userId);
-		return modelMapper.map(result.get(), PreferencesDto.class);
+		return toDto((BasePreferenceEntity) result.get(), userDto);
+	}
+
+	private <T extends BasePreferenceEntity> T savePreferences(PreferencesDto preferencesDto, Class<T> entityClass,
+			PreferencesDao dao) {
+		T entity = modelMapper.map(preferencesDto, entityClass);
+		entity.setLookingForValues(serializeLookingFor(preferencesDto.getLookingFor()));
+		entity.setMaritalStatus(preferencesDto.getMaritalStatus());
+		entity.setProfession(normalizeProfession(preferencesDto.getProfession()));
+		return (T) dao.save(entity);
+	}
+
+	private PreferencesDto normalizePreferences(PreferencesDto preferencesDto, UserDto userDto) {
+		PreferencesDto normalized = new PreferencesDto();
+		normalized.setUserId(preferencesDto.getUserId());
+		normalized.setMinAge(preferencesDto.getMinAge());
+		normalized.setMaxAge(preferencesDto.getMaxAge());
+		normalized.setDistance(preferencesDto.getDistance());
+		normalized.setSmoking(preferencesDto.getSmoking());
+		normalized.setDrinking(preferencesDto.getDrinking());
+		normalized.setPersonality(preferencesDto.getPersonality());
+		normalized.setReligion(preferencesDto.getReligion());
+		normalized.setLifestyle(preferencesDto.getLifestyle());
+		normalized.setMaritalStatus(firstNonNull(preferencesDto.getMaritalStatus(), userDto.getMaritalStatus()));
+		normalized.setProfession(normalizeProfession(firstNonBlank(preferencesDto.getProfession(), userDto.getProfession())));
+		normalized.setLookingFor(normalizeLookingFor(preferencesDto.getLookingFor(), userDto.getLookingFor()));
+		return normalized;
+	}
+
+	private PreferencesDto toDto(BasePreferenceEntity entity, UserDto userDto) {
+		PreferencesDto dto = modelMapper.map(entity, PreferencesDto.class);
+		dto.setLookingFor(deserializeLookingFor(entity.getLookingForValues(), userDto.getLookingFor()));
+		dto.setMaritalStatus(firstNonNull(entity.getMaritalStatus(), userDto.getMaritalStatus()));
+		dto.setProfession(normalizeProfession(firstNonBlank(entity.getProfession(), userDto.getProfession())));
+		return dto;
+	}
+
+	private String serializeLookingFor(Set<LookingFor> values) {
+		if (values == null || values.isEmpty()) {
+			return null;
+		}
+		return values.stream()
+				.filter(value -> value != null)
+				.map(Enum::name)
+				.distinct()
+				.limit(7)
+				.sorted()
+				.collect(Collectors.joining(","));
+	}
+
+	private Set<LookingFor> deserializeLookingFor(String values, Set<LookingFor> fallback) {
+		if (values == null || values.isBlank()) {
+			return fallback == null ? new LinkedHashSet<>() : new LinkedHashSet<>(fallback);
+		}
+
+		Set<LookingFor> parsed = new LinkedHashSet<>();
+		for (String token : values.split(",")) {
+			try {
+				parsed.add(LookingFor.valueOf(token.trim()));
+			} catch (IllegalArgumentException ignored) {
+				// Skip unknown persisted values.
+			}
+		}
+		return parsed.isEmpty() && fallback != null ? new LinkedHashSet<>(fallback) : parsed;
+	}
+
+	private Set<LookingFor> normalizeLookingFor(Set<LookingFor> requested, Set<LookingFor> fallback) {
+		if (requested != null) {
+			return requested.stream()
+					.filter(value -> value != null)
+					.limit(7)
+					.collect(Collectors.toCollection(LinkedHashSet::new));
+		}
+		return fallback == null ? new LinkedHashSet<>() : new LinkedHashSet<>(fallback);
+	}
+
+	private String firstNonBlank(String primary, String fallback) {
+		if (primary != null && !primary.isBlank()) {
+			return primary.trim();
+		}
+		if (fallback != null && !fallback.isBlank()) {
+			return fallback.trim();
+		}
+		return null;
+	}
+
+	private <T> T firstNonNull(T primary, T fallback) {
+		return primary != null ? primary : fallback;
+	}
+
+	private String normalizeProfession(String profession) {
+		if (profession == null) {
+			return null;
+		}
+
+		String trimmed = profession.trim().replaceAll("\\s+", " ");
+		if (trimmed.isEmpty()) {
+			return null;
+		}
+
+		return trimmed.length() <= 80 ? trimmed : trimmed.substring(0, 80);
 	}
 }

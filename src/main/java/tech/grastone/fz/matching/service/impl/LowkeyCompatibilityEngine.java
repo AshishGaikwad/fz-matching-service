@@ -42,9 +42,17 @@ public class LowkeyCompatibilityEngine {
         int locationAccuracy = locationAccuracyScore(candidateSession.getLocationAccuracyMeters());
         int distance = distanceScore(distanceKm, viewerSession.getRadiusKm());
         int age = ageScore(viewer, candidate, viewerPreference, candidatePreference);
-        int lookingFor = lookingForScore(viewer, viewerSession, candidate, candidateSession);
+        int lookingFor = lookingForScore(viewer, viewerSession, viewerPreference, candidate, candidateSession, candidatePreference);
         int availability = availabilityScore(candidateSession);
-        int profession = professionScore(viewer.getProfession(), candidate.getProfession());
+        String viewerProfession = firstNonBlank(
+                viewerPreference == null ? null : viewerPreference.getProfession(),
+                viewer.getProfession()
+        );
+        String candidateProfession = firstNonBlank(
+                candidatePreference == null ? null : candidatePreference.getProfession(),
+                candidate.getProfession()
+        );
+        int profession = professionScore(viewerProfession, candidateProfession);
         int interestLifestyle = interestLifestyleScore(viewerPreference, candidatePreference);
         int freshness = freshnessScore(history);
 
@@ -70,12 +78,19 @@ public class LowkeyCompatibilityEngine {
             explanations.add("Similar age range");
         }
 
-        Set<LookingFor> sharedIntent = sharedIntent(viewer, viewerSession, candidate, candidateSession);
+        Set<LookingFor> sharedIntent = sharedIntent(
+                viewer,
+                viewerSession,
+                viewerPreference,
+                candidate,
+                candidateSession,
+                candidatePreference
+        );
         if (!sharedIntent.isEmpty()) {
             explanations.add("Both looking for " + label(sharedIntent.iterator().next()));
         }
 
-        if (profession >= 4 && candidate.getProfession() != null) {
+        if (profession >= 4 && candidateProfession != null) {
             explanations.add("Similar professional energy");
         }
 
@@ -158,11 +173,13 @@ public class LowkeyCompatibilityEngine {
     private int lookingForScore(
             UserDto viewer,
             LowkeySessionEntity viewerSession,
+            PreferencesDto viewerPreference,
             UserDto candidate,
-            LowkeySessionEntity candidateSession
+            LowkeySessionEntity candidateSession,
+            PreferencesDto candidatePreference
     ) {
-        Set<LookingFor> viewerIntent = lookingFor(viewer, viewerSession);
-        Set<LookingFor> candidateIntent = lookingFor(candidate, candidateSession);
+        Set<LookingFor> viewerIntent = lookingFor(viewer, viewerSession, viewerPreference);
+        Set<LookingFor> candidateIntent = lookingFor(candidate, candidateSession, candidatePreference);
         if (viewerIntent.isEmpty() || candidateIntent.isEmpty()) {
             return 8;
         }
@@ -259,18 +276,23 @@ public class LowkeyCompatibilityEngine {
     private Set<LookingFor> sharedIntent(
             UserDto viewer,
             LowkeySessionEntity viewerSession,
+            PreferencesDto viewerPreference,
             UserDto candidate,
-            LowkeySessionEntity candidateSession
+            LowkeySessionEntity candidateSession,
+            PreferencesDto candidatePreference
     ) {
-        Set<LookingFor> shared = new HashSet<>(lookingFor(viewer, viewerSession));
-        shared.retainAll(lookingFor(candidate, candidateSession));
+        Set<LookingFor> shared = new HashSet<>(lookingFor(viewer, viewerSession, viewerPreference));
+        shared.retainAll(lookingFor(candidate, candidateSession, candidatePreference));
         return shared;
     }
 
-    private Set<LookingFor> lookingFor(UserDto user, LowkeySessionEntity session) {
+    private Set<LookingFor> lookingFor(UserDto user, LowkeySessionEntity session, PreferencesDto preference) {
         Set<LookingFor> sessionIntent = parseLookingFor(session.getLookingForValues());
         if (!sessionIntent.isEmpty()) {
             return sessionIntent;
+        }
+        if (preference != null && preference.getLookingFor() != null && !preference.getLookingFor().isEmpty()) {
+            return preference.getLookingFor();
         }
         return user.getLookingFor() == null ? Set.of() : user.getLookingFor();
     }
@@ -354,6 +376,16 @@ public class LowkeyCompatibilityEngine {
             return false;
         }
         return !"NONE".equals(a.name()) && !"ANY".equals(a.name());
+    }
+
+    private String firstNonBlank(String primary, String fallback) {
+        if (primary != null && !primary.isBlank()) {
+            return primary.trim();
+        }
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback.trim();
+        }
+        return null;
     }
 
     private boolean insideRange(int age, PreferencesDto preference) {

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Set;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -46,6 +47,7 @@ import tech.grastone.fz.matching.exception.ValidationException;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.service.MatchingV2Service;
 import tech.grastone.fz.matching.service.PreferencesService;
+import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 import tech.grastone.fz.matching.util.CommonUtil;
@@ -64,6 +66,7 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 	private final UserMatchesDao userMatchesDao;
 	private final MatchRequestDao matchRequestDao;
 	private final ConnectionDao connectionDao;
+	private final SafetyService safetyService;
 
 	@Override
 	public List<ShowProfileDto> getMatches(long userId, Pageable pageable) {
@@ -74,6 +77,9 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 				userId, MatchStatus.PENDING, MatchType.BASE, pageable);
 
 		List<UserMatchesEntity> matches = new ArrayList<>(matchPage.getContent());
+		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+				matches.stream().map(UserMatchesEntity::getUserId2).toList());
+		matches.removeIf(match -> blockedIds.contains(match.getUserId2()));
 		if (matches.isEmpty()) {
 			PreferencesDto preferencesDto = preferencesService.get((int) userId);
 			List<MatchedByPreferencesDto> matchedDtos = matchingDao.getMatchedUserUsingPreferences(
@@ -82,6 +88,9 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 			if (matchedDtos != null && !matchedDtos.isEmpty()) {
 				List<UserMatchesEntity> newMatches = new ArrayList<>();
 				for (MatchedByPreferencesDto dto : matchedDtos) {
+					if (safetyService.isBlocked(userId, dto.getUser_id())) {
+						continue;
+					}
 					UserMatchesEntity match = createUserMatch(userId, dto.getUser_id());
 					newMatches.add(match);
 					matches.add(match);
@@ -99,6 +108,7 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 		if (match == null || match.getUserId1() != userId) {
 			throw new DataNotFoundException("Match not found or unauthorized access.");
 		}
+		safetyService.assertNotBlocked(userId, match.getUserId2());
 
 		UserDto me = getUserDetails(userId);
 		UserDto matchedUser = getUserDetails(match.getUserId2());
@@ -125,6 +135,7 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 	@Override
 	public MatchRequestEntity sendRequest(SendMatchRequestDto dto) {
 		validateIds(dto.getSenderId(), dto.getReceiverId());
+		safetyService.assertNotBlocked(dto.getSenderId(), dto.getReceiverId());
 		assertNoExistingConnection(dto.getSenderId(), dto.getReceiverId());
 
 		Long senderId = dto.getSenderId();
@@ -203,10 +214,15 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 	public List<ShowProfileDto> getSentRequest(long userId, Pageable pageable) {
 		Page<MatchRequestEntity> matchPage = matchRequestDao.findBySenderIdAndRequestStatus(userId,
 				RequestStatus.PENDING, pageable);
+		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+				matchPage.getContent().stream().map(MatchRequestEntity::getReceiverId).toList());
 		List<ShowProfileDto> profiles = new ArrayList<>();
 		Map<Long, UserDto> userCache = new HashMap<>();
 		Map<Long, List<UserImageEntity>> imageCache = new HashMap<>();
 		for (MatchRequestEntity content : matchPage.getContent()) {
+			if (blockedIds.contains(content.getReceiverId())) {
+				continue;
+			}
 			Long receiverId = content.getReceiverId();
 			ShowProfileDto profile = new ShowProfileDto();
 			profile.setUser(userCache.computeIfAbsent(receiverId, this::getUserDetails));
@@ -222,10 +238,15 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 	public List<ShowProfileDto> getReceivedRequest(long userId, Pageable pageable) {
 		Page<MatchRequestEntity> matchPage = matchRequestDao.findByReceiverIdAndRequestStatus(userId,
 				RequestStatus.PENDING, pageable);
+		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
+				matchPage.getContent().stream().map(MatchRequestEntity::getSenderId).toList());
 		List<ShowProfileDto> profiles = new ArrayList<>();
 		Map<Long, UserDto> userCache = new HashMap<>();
 		Map<Long, List<UserImageEntity>> imageCache = new HashMap<>();
 		for (MatchRequestEntity content : matchPage.getContent()) {
+			if (blockedIds.contains(content.getSenderId())) {
+				continue;
+			}
 			Long senderId = content.getSenderId();
 			ShowProfileDto profile = new ShowProfileDto();
 			profile.setUser(userCache.computeIfAbsent(senderId, this::getUserDetails));

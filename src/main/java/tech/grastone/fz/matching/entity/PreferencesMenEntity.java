@@ -12,7 +12,10 @@ indexes = {
 		@Index(name="idx_distance",columnList = "distance"),
 		@Index(name="idx_personality",columnList = "personality"),
 		@Index(name="idx_religion",columnList = "religion"),
-		@Index(name="idx_lifestyle",columnList = "lifestyle")
+		@Index(name="idx_lifestyle",columnList = "lifestyle"),
+		@Index(name="idx_marital_status",columnList = "marital_status"),
+		@Index(name="idx_profession",columnList = "profession"),
+		@Index(name="idx_looking_for",columnList = "looking_for")
 })
 @Entity
 public class PreferencesMenEntity extends BasePreferenceEntity {

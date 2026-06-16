@@ -25,8 +25,10 @@ public class PreferencesController {
 	private final PreferencesService preferencesSevice;
 
 	@PostMapping(path = "save", produces = MediaType.APPLICATION_JSON_VALUE, consumes = MediaType.APPLICATION_JSON_VALUE)
-	public ResponseEntity<SuccessResponseHandler<PreferencesDto>> savePref(@RequestBody PreferencesDto preferencesDto) {
+	public ResponseEntity<SuccessResponseHandler<PreferencesDto>> savePref(Authentication authentication,
+			@RequestBody PreferencesDto preferencesDto) {
 		log.info("Saving user preferences");
+		preferencesDto.setUserId(Long.parseLong(authentication.getPrincipal().toString()));
 
 		return ResponseEntity.ok(new SuccessResponseHandler<PreferencesDto>(200, "Preferences has been updated !",
 				preferencesSevice.save(preferencesDto)));

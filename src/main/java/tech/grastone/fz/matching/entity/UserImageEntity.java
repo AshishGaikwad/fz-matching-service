@@ -1,7 +1,9 @@
 package tech.grastone.fz.matching.entity;
 
 import java.io.Serializable;
+import java.time.LocalDateTime;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -14,6 +16,7 @@ import lombok.Getter;
 import lombok.Setter;
 import tech.grastone.fz.matching.entity.base.BaseEntity;
 import tech.grastone.fz.matching.enums.ImageType;
+import tech.grastone.fz.matching.enums.ImageModerationStatus;
 
 @Entity
 @Table(name="user_images", uniqueConstraints = {
@@ -32,4 +35,12 @@ public class UserImageEntity extends BaseEntity implements Serializable{
 	private ImageType type;
 	
 	private String url;
+
+	@Enumerated(EnumType.STRING)
+	private ImageModerationStatus moderationStatus;
+
+	@Column(length = 512)
+	private String moderationNotes;
+
+	private LocalDateTime moderatedAt;
 }

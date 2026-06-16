@@ -13,6 +13,7 @@ import tech.grastone.fz.matching.exception.DataNotFoundException;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.service.ConnectionService;
 import tech.grastone.fz.matching.service.PreferencesService;
+import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 import tech.grastone.fz.matching.util.CommonUtil;
 
@@ -31,6 +32,7 @@ public class ConnectionServiceImpl implements ConnectionService {
     private final UserMatchesDao userMatchesDao;
     private final MatchRequestDao matchRequestDao;
     private final ConnectionDao connectionDao;
+    private final SafetyService safetyService;
 
     // In-memory caches for user details and images
     private final Map<Long, UserDto> userCache = new HashMap<>();
@@ -47,12 +49,20 @@ public class ConnectionServiceImpl implements ConnectionService {
             return Collections.emptyList();
         }
 
+        List<Long> connectedUserIds = connections.stream()
+                .map(connection -> connection.getUserId1() == userId ? connection.getUserId2() : connection.getUserId1())
+                .toList();
+        Set<Long> blockedIds = safetyService.blockedUserIds(userId, connectedUserIds);
         List<ShowProfileDto> profiles = new ArrayList<>();
 
         for (ConnectionsEntity connection : connections) {
             long connectedUserId = (connection.getUserId1() == userId)
                     ? connection.getUserId2()
                     : connection.getUserId1();
+
+            if (blockedIds.contains(connectedUserId)) {
+                continue;
+            }
 
             try {
                 UserDto userDto = getUserDetailsCached(connectedUserId);
