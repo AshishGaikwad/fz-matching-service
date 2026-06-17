@@ -15,7 +15,7 @@ public class LowkeyCompatibilityResultDto {
 
     public String getMatchExplanation() {
         return explanations == null || explanations.isEmpty()
-                ? "Nearby and available now"
+                ? "Nearby and open to connecting"
                 : String.join("\n", explanations);
     }
 }

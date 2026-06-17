@@ -25,21 +25,26 @@ public interface LowkeySessionRepository extends JpaRepository<LowkeySessionEnti
             LocalDateTime now
     );
 
+    Optional<LowkeySessionEntity> findFirstByUserIdAndStatusOrderByCreatedAtDesc(
+            Long userId,
+            LowkeySessionStatus status
+    );
+
     long countByStatusAndExpiresAtAfter(LowkeySessionStatus status, LocalDateTime now);
+
+    long countByStatus(LowkeySessionStatus status);
 
     @Query("""
             select s
               from LowkeySessionEntity s
              where s.status = tech.grastone.fz.matching.enums.LowkeySessionStatus.ACTIVE
-               and s.expiresAt > :now
                and s.userId <> :userId
                and s.latitude between :minLat and :maxLat
                and s.longitude between :minLon and :maxLon
-             order by s.lastSeenAt desc
+             order by s.createdAt desc
             """)
     List<LowkeySessionEntity> findNearbyCandidates(
             @Param("userId") Long userId,
-            @Param("now") LocalDateTime now,
             @Param("minLat") double minLat,
             @Param("maxLat") double maxLat,
             @Param("minLon") double minLon,

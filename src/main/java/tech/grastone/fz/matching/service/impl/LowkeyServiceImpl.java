@@ -95,8 +95,8 @@ public class LowkeyServiceImpl implements LowkeyService {
     public LowkeySessionDto getMySession(Long userId) {
         expireOldSessions();
         return lowkeySessionRepository
-                .findFirstByUserIdAndStatusAndExpiresAtAfterOrderByCreatedAtDesc(
-                        userId, LowkeySessionStatus.ACTIVE, LocalDateTime.now())
+                .findFirstByUserIdAndStatusOrderByCreatedAtDesc(
+                        userId, LowkeySessionStatus.ACTIVE)
                 .map(this::toSessionDto)
                 .orElse(null);
     }
@@ -132,7 +132,7 @@ public class LowkeyServiceImpl implements LowkeyService {
         session.setLookingForValues(serializeLookingFor(lookingFor));
         session.setCreatedAt(now);
         session.setLastSeenAt(now);
-        session.setExpiresAt(now.plusMinutes(durationMinutes));
+        session.setExpiresAt(now.plusYears(100));
         session.setCreatedBy(String.valueOf(userId));
 
         LowkeySessionEntity saved = lowkeySessionRepository.save(session);
@@ -206,8 +206,6 @@ public class LowkeyServiceImpl implements LowkeyService {
         expireOldSessions();
         LocalDateTime now = LocalDateTime.now();
         LowkeySessionEntity me = resolveActiveSession(userId, null);
-        me.setLastSeenAt(now);
-        lowkeySessionRepository.save(me);
 
         UserDto currentUser = getUserDetails(userId);
         PreferencesDto currentPreference = safeGetPreference(userId);
@@ -219,7 +217,6 @@ public class LowkeyServiceImpl implements LowkeyService {
 
         List<LowkeySessionEntity> candidates = lowkeySessionRepository.findNearbyCandidates(
                 userId,
-                now,
                 box.minLat(),
                 box.maxLat(),
                 box.minLon(),
@@ -337,21 +334,19 @@ public class LowkeyServiceImpl implements LowkeyService {
     }
 
     private LowkeySessionEntity resolveActiveSession(Long userId, Long sessionId) {
-        LocalDateTime now = LocalDateTime.now();
         if (sessionId != null) {
             LowkeySessionEntity session = lowkeySessionRepository.findById(sessionId)
                     .orElseThrow(() -> new ValidationException("Lowkey session not found"));
             if (!session.getUserId().equals(userId)
-                    || session.getStatus() != LowkeySessionStatus.ACTIVE
-                    || !session.getExpiresAt().isAfter(now)) {
+                    || session.getStatus() != LowkeySessionStatus.ACTIVE) {
                 throw new ValidationException("Enter Lowkey before discovering people");
             }
             return session;
         }
 
         return lowkeySessionRepository
-                .findFirstByUserIdAndStatusAndExpiresAtAfterOrderByCreatedAtDesc(
-                        userId, LowkeySessionStatus.ACTIVE, now)
+                .findFirstByUserIdAndStatusOrderByCreatedAtDesc(
+                        userId, LowkeySessionStatus.ACTIVE)
                 .orElseThrow(() -> new ValidationException("Enter Lowkey before discovering people"));
     }
 
@@ -373,8 +368,7 @@ public class LowkeyServiceImpl implements LowkeyService {
     private LowkeySessionDto toSessionDto(LowkeySessionEntity session) {
         LowkeySessionDto dto = new LowkeySessionDto();
         dto.setSessionId(session.getSessionId());
-        dto.setActive(session.getStatus() == LowkeySessionStatus.ACTIVE
-                && session.getExpiresAt().isAfter(LocalDateTime.now()));
+        dto.setActive(session.getStatus() == LowkeySessionStatus.ACTIVE);
         dto.setRadiusKm(session.getRadiusKm());
         dto.setDurationMinutes(session.getDurationMinutes());
         dto.setLatitude(session.getLatitude());
@@ -382,10 +376,9 @@ public class LowkeyServiceImpl implements LowkeyService {
         dto.setLocationAccuracyMeters(session.getLocationAccuracyMeters());
         dto.setEnteredAt(session.getEnteredAt());
         dto.setExpiresAt(session.getExpiresAt());
-        dto.setRemainingSeconds(secondsUntil(session.getExpiresAt()));
-        dto.setParticipantCount(lowkeySessionRepository.countByStatusAndExpiresAtAfter(
-                LowkeySessionStatus.ACTIVE,
-                LocalDateTime.now()
+        dto.setRemainingSeconds(0);
+        dto.setParticipantCount(lowkeySessionRepository.countByStatus(
+                LowkeySessionStatus.ACTIVE
         ));
         dto.setLookingFor(parseLookingFor(session.getLookingForValues()));
         return dto;
@@ -491,7 +484,8 @@ public class LowkeyServiceImpl implements LowkeyService {
     }
 
     private void expireOldSessions() {
-        lowkeySessionRepository.expireOldSessions(LocalDateTime.now());
+        // Lowkey is persistent until the user explicitly leaves.
+        // We keep this hook so older callers remain safe, but it no longer auto-expires sessions.
     }
 
     private UserDto getUserDetails(long userId) {
@@ -618,13 +612,6 @@ public class LowkeyServiceImpl implements LowkeyService {
     }
 
     private String onlineStatus(LocalDateTime lastSeenAt) {
-        long seconds = Math.max(0, Duration.between(lastSeenAt, LocalDateTime.now()).getSeconds());
-        if (seconds <= 45) {
-            return "ONLINE";
-        }
-        if (seconds <= 300) {
-            return "RECENTLY_ACTIVE";
-        }
         return "AVAILABLE";
     }
 

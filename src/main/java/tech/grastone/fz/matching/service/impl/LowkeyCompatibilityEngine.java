@@ -43,7 +43,6 @@ public class LowkeyCompatibilityEngine {
         int distance = distanceScore(distanceKm, viewerSession.getRadiusKm());
         int age = ageScore(viewer, candidate, viewerPreference, candidatePreference);
         int lookingFor = lookingForScore(viewer, viewerSession, viewerPreference, candidate, candidateSession, candidatePreference);
-        int availability = availabilityScore(candidateSession);
         String viewerProfession = firstNonBlank(
                 viewerPreference == null ? null : viewerPreference.getProfession(),
                 viewer.getProfession()
@@ -60,7 +59,6 @@ public class LowkeyCompatibilityEngine {
         breakdown.put("distance", distance);
         breakdown.put("ageCompatibility", age);
         breakdown.put("lookingForIntent", lookingFor);
-        breakdown.put("availability", availability);
         breakdown.put("professionSimilarity", profession);
         breakdown.put("interestAndLifestyle", interestLifestyle);
         breakdown.put("discoveryFreshness", freshness);
@@ -92,10 +90,6 @@ public class LowkeyCompatibilityEngine {
 
         if (profession >= 4 && candidateProfession != null) {
             explanations.add("Similar professional energy");
-        }
-
-        if (availability >= 8) {
-            explanations.add("Available right now");
         }
 
         if (explanations.isEmpty()) {
@@ -194,24 +188,6 @@ public class LowkeyCompatibilityEngine {
             return 9;
         }
         return 4;
-    }
-
-    private int availabilityScore(LowkeySessionEntity candidateSession) {
-        long secondsSinceSeen = Math.max(
-                0,
-                Duration.between(candidateSession.getLastSeenAt(), LocalDateTime.now()).getSeconds()
-        );
-
-        if (secondsSinceSeen <= 30) {
-            return 10;
-        }
-        if (secondsSinceSeen <= 120) {
-            return 8;
-        }
-        if (secondsSinceSeen <= 300) {
-            return 6;
-        }
-        return 3;
     }
 
     private int professionScore(String viewerProfession, String candidateProfession) {
