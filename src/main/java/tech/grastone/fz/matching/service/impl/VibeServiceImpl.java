@@ -43,6 +43,7 @@ import tech.grastone.fz.matching.enums.ConnectionStatus;
 import tech.grastone.fz.matching.enums.Drinking;
 import tech.grastone.fz.matching.enums.Gender;
 import tech.grastone.fz.matching.enums.Lifestyle;
+import tech.grastone.fz.matching.enums.LimitType;
 import tech.grastone.fz.matching.enums.Orientation;
 import tech.grastone.fz.matching.enums.Personality;
 import tech.grastone.fz.matching.enums.Religion;
@@ -63,6 +64,7 @@ import tech.grastone.fz.matching.repository.VibeConnectionRepository;
 import tech.grastone.fz.matching.repository.VibeRepository;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.SafetyService;
+import tech.grastone.fz.matching.service.UserLimitService;
 import tech.grastone.fz.matching.service.VibeService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
@@ -88,6 +90,7 @@ public class VibeServiceImpl implements VibeService {
     private final PreferencesService preferencesService;
     private final ConnectionDao connectionDao;
     private final SafetyService safetyService;
+    private final UserLimitService userLimitService;
 
     @Override
     @Transactional
@@ -130,6 +133,11 @@ public class VibeServiceImpl implements VibeService {
         expireOldParticipations();
 
         UserDto user = getUserDetails(userId);
+        Optional<UserVibeParticipationEntity> currentActive = participationRepository
+                .findFirstByUserIdAndStatusAndExpiresAtAfterOrderByJoinedAtDesc(userId, VibeParticipationStatus.ACTIVE, LocalDateTime.now());
+        if (currentActive.isPresent() && isFreeUser(user)) {
+            return toActiveVibeDto(currentActive.get());
+        }
         VibeEntity vibe = vibeRepository.findByVibeIdAndActiveTrue(request.getVibeId())
                 .orElseThrow(() -> new DataNotFoundException("Vibe not found"));
         int radiusKm = normalizeRadius(user, request.getRadiusKm());
@@ -139,6 +147,9 @@ public class VibeServiceImpl implements VibeService {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime requestedEndsAt = now.plusMinutes(durationMinutes);
 
+        if (currentActive.isEmpty()) {
+            userLimitService.consume(userId, user, LimitType.VIBE_JOIN);
+        }
         leaveCurrentParticipations(userId, null, now);
         ActiveVibeSessionEntity session = sessionRepository
                 .findFirstByVibeIdAndStatusAndEndsAtAfterOrderByEndsAtAsc(vibe.getVibeId(), VibeSessionStatus.ACTIVE, now)
@@ -176,6 +187,10 @@ public class VibeServiceImpl implements VibeService {
     @Transactional
     public ActiveVibeDto leaveVibe(Long userId, LeaveVibeRequestDto request) {
         expireOldParticipations();
+        UserDto user = getUserDetails(userId);
+        if (isFreeUser(user)) {
+            throw new ValidationException("Free vibes cannot be stopped early. Upgrade to Premium to stop a vibe.");
+        }
         LocalDateTime now = LocalDateTime.now();
         List<UserVibeParticipationEntity> participations = leaveCurrentParticipations(userId, request == null ? null : request.getSessionId(), now);
         if (participations.isEmpty()) {

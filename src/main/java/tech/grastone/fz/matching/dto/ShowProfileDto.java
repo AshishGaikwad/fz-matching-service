@@ -17,5 +17,7 @@ public class ShowProfileDto {
 	public UserLimitsEntity userLimits;
 	public MatchRequestEntity matchRequests;
 	public List<UserImageEntity> userImages;
+	public boolean hidden;
+	public UserLimitStatusDto limitStatus;
 
 }

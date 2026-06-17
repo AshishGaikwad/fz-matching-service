@@ -24,6 +24,7 @@ import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.service.MatchingService;
 import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.PreferencesService;
+import tech.grastone.fz.matching.service.UserLimitService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 import tech.grastone.fz.matching.util.CommonUtil;
@@ -43,6 +44,7 @@ public class MatchingServiceImpl implements MatchingService {
 	private final MatchRequestDao matchRequestDao;
 	private final ConnectionDao connectionDao;
 	private final SafetyService safetyService;
+	private final UserLimitService userLimitService;
 
 	@Override
 	public List<ShowProfileDto> getMatches(long userId, Pageable pageable) {
@@ -295,6 +297,8 @@ public class MatchingServiceImpl implements MatchingService {
 			throw new IllegalArgumentException("Invalid userId: " + userId);
 		}
 
+		UserDto viewer = getUserDetails(userId);
+		UserLimitStatusDto seenYouLimit = userLimitService.getStatus(userId, viewer, LimitType.SEEN_YOU_VIEW);
 		Page<MatchRequestEntity>  matchPage =  matchRequestDao.findByReceiverIdAndRequestStatus(
 				userId,
 				RequestStatus.PENDING,
@@ -306,17 +310,24 @@ public class MatchingServiceImpl implements MatchingService {
 		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
 				matchPage.getContent().stream().map(MatchRequestEntity::getSenderId).toList());
 		if(matchPage.hasContent() ){
+			int visibleCount = Math.max(0, seenYouLimit.getLimitValue() - (pageable.getPageNumber() * pageable.getPageSize()));
 			matchPage.getContent().stream().forEach((content)->{
 				if (blockedIds.contains(content.getSenderId())) {
 					return;
 				}
-				List<UserImageEntity> userImagesList = getUserImages(content.getSenderId());
-				UserDto matchedUser = getUserDetails(content.getSenderId());
 				ShowProfileDto profile = new ShowProfileDto();
-				profile.setUser(matchedUser);
 				profile.setMatchRequests(content);
 				profile.setId(UUID.randomUUID().toString());
-				profile.setUserImages(userImagesList);
+				profile.setLimitStatus(seenYouLimit);
+				if (seenYouLimit.isPremium() || profiles.size() < visibleCount) {
+					List<UserImageEntity> userImagesList = getUserImages(content.getSenderId());
+					UserDto matchedUser = getUserDetails(content.getSenderId());
+					profile.setUser(matchedUser);
+					profile.setUserImages(userImagesList);
+					profile.setHidden(false);
+				} else {
+					profile.setHidden(true);
+				}
 				profiles.add(profile);
 			});
 		}

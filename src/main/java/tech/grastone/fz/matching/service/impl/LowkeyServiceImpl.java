@@ -46,6 +46,7 @@ import tech.grastone.fz.matching.entity.MatchScoreCacheEntity;
 import tech.grastone.fz.matching.entity.UserImageEntity;
 import tech.grastone.fz.matching.entity.UserLocationEntity;
 import tech.grastone.fz.matching.enums.LowkeySessionStatus;
+import tech.grastone.fz.matching.enums.LimitType;
 import tech.grastone.fz.matching.enums.LookingFor;
 import tech.grastone.fz.matching.enums.RequestStatus;
 import tech.grastone.fz.matching.enums.SubscriptionPlan;
@@ -61,6 +62,7 @@ import tech.grastone.fz.matching.service.LowkeyService;
 import tech.grastone.fz.matching.service.MatchingService;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.SafetyService;
+import tech.grastone.fz.matching.service.UserLimitService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 
@@ -89,6 +91,7 @@ public class LowkeyServiceImpl implements LowkeyService {
     private final SafetyService safetyService;
     private final LowkeyCompatibilityEngine compatibilityEngine;
     private final ObjectMapper objectMapper;
+    private final UserLimitService userLimitService;
 
     @Override
     @Transactional
@@ -312,6 +315,8 @@ public class LowkeyServiceImpl implements LowkeyService {
             throw new ValidationException("Receiver ID is required");
         }
         resolveActiveSession(userId, request.getSessionId());
+        UserDto sender = getUserDetails(userId);
+        userLimitService.consume(userId, sender, LimitType.VIBE_PROFILE_ACTION);
         safetyService.assertNotBlocked(userId, request.getReceiverId());
 
         SendMatchRequestDto dto = new SendMatchRequestDto();
@@ -320,7 +325,6 @@ public class LowkeyServiceImpl implements LowkeyService {
         dto.setRequestMessage(limit(request.getRequestMessage(), 100));
         MatchRequestEntity saved = matchingService.sendRequest(dto);
 
-        UserDto sender = getUserDetails(userId);
         sendNotificationSafe(
                 request.getReceiverId(),
                 "You have a new connection request",
