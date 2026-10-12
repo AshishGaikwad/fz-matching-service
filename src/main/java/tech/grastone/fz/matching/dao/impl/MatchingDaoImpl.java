@@ -17,6 +17,7 @@ import tech.grastone.fz.matching.dto.UserDto;
 import tech.grastone.fz.matching.entity.MatchRequestEntity;
 import tech.grastone.fz.matching.enums.Gender;
 import tech.grastone.fz.matching.enums.Orientation;
+import tech.grastone.fz.matching.util.GenderCompatibilityUtil;
 import tech.grastone.fz.matching.util.QueryUtil;
 
 @Repository
@@ -25,6 +26,7 @@ public class MatchingDaoImpl implements MatchingDao {
 
     private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
     private final QueryUtil queryUtil;
+    private final GenderCompatibilityUtil genderCompatibilityUtil;
 
     @Override
     public List<MatchedByPreferencesDto> getMatchedUserUsingPreferences(UserDto userDto, PreferencesDto preferencesDto, Pageable pageable) {
@@ -51,6 +53,7 @@ public class MatchingDaoImpl implements MatchingDao {
         params.put("lat_rad", -65.963458);
         params.put("lon_rad", 80.289978);
         params.put("currentUserId", userDto.getId());
+        params.put("targetGender", targetGenderParam(userDto));
         return namedParameterJdbcTemplate.query(paginatedQuery, params, (ResultSet rs, int rowNum) -> {
             MatchedByPreferencesDto dto = new MatchedByPreferencesDto();
             dto.setUser_id(rs.getLong(1));
@@ -70,6 +73,11 @@ public class MatchingDaoImpl implements MatchingDao {
             case LESBIAN -> "preferences_lesbian";
             default -> throw new IllegalArgumentException("Unsupported orientation: " + orientation);
         };
+    }
+
+    private String targetGenderParam(UserDto userDto) {
+        Gender targetGender = genderCompatibilityUtil.requiredCandidateGender(userDto);
+        return targetGender == null ? null : targetGender.name();
     }
 
 }

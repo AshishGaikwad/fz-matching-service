@@ -25,6 +25,7 @@ import tech.grastone.fz.matching.enums.Religion;
 import tech.grastone.fz.matching.enums.Smoking;
 import tech.grastone.fz.matching.enums.SubscriptionPlan;
 import tech.grastone.fz.matching.enums.UserStatus;
+import tech.grastone.fz.matching.util.GenderCompatibilityUtil;
 
 @Repository
 @AllArgsConstructor
@@ -33,6 +34,7 @@ public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
     private static final int ZERO_KM_TEST_RADIUS_KM = 5;
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final GenderCompatibilityUtil genderCompatibilityUtil;
 
     @Override
     public List<VibeCandidateRowDto> discoverCandidates(UserDto currentUser, Long sessionId, double latitude,
@@ -87,11 +89,25 @@ public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
                   AND p.status = 'ACTIVE'
                   AND p.expires_at > NOW()
                   AND p.user_id <> :currentUserId
+                  AND (
+                      :targetGender IS NULL
+                      OR UPPER(CAST(u.gender AS CHAR)) = :targetGender
+                      OR CAST(u.gender AS CHAR) =
+                         CASE :targetGender
+                             WHEN 'MALE' THEN '0'
+                             WHEN 'FEMALE' THEN '1'
+                             WHEN 'OTHER' THEN '2'
+                         END
+                  )
                   AND NOT EXISTS (
                       SELECT 1
                       FROM connections c
-                      WHERE c.user_id1 = LEAST(:currentUserId, p.user_id)
-                        AND c.user_id2 = GREATEST(:currentUserId, p.user_id)
+                      WHERE (
+                          (c.user_id1 = :currentUserId AND c.user_id2 = p.user_id)
+                          OR (c.user_id1 = p.user_id AND c.user_id2 = :currentUserId)
+                      )
+                      AND c.is_active = 1
+                      AND c.status = 'ACCEPTED'
                   )
                   AND p.latitude BETWEEN :minLat AND :maxLat
                   AND p.longitude BETWEEN :minLon AND :maxLon
@@ -106,6 +122,8 @@ public class VibeDiscoveryDaoImpl implements VibeDiscoveryDao {
         params.put("latitude", latitude);
         params.put("longitude", longitude);
         params.put("radiusKm", effectiveRadiusKm);
+        Gender targetGender = genderCompatibilityUtil.requiredCandidateGender(currentUser);
+        params.put("targetGender", targetGender == null ? null : targetGender.name());
         params.put("zeroKmTestRadiusKm", ZERO_KM_TEST_RADIUS_KM);
         params.put("minLat", latitude - latDelta);
         params.put("maxLat", latitude + latDelta);

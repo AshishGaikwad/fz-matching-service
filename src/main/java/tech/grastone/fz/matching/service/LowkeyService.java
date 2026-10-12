@@ -19,4 +19,5 @@ public interface LowkeyService {
     LowkeySessionDto leave(Long userId, LowkeyLeaveRequestDto request);
     List<LowkeyDiscoverDto> discover(Long userId, Pageable pageable);
     MatchRequestEntity sendRequest(Long userId, LowkeyRequestDto request);
+    void markProfileViewed(Long userId, Long candidateUserId);
 }

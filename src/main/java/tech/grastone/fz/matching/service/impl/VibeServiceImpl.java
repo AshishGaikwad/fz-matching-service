@@ -68,6 +68,7 @@ import tech.grastone.fz.matching.service.UserLimitService;
 import tech.grastone.fz.matching.service.VibeService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
+import tech.grastone.fz.matching.util.GenderCompatibilityUtil;
 
 @Service
 @AllArgsConstructor
@@ -91,6 +92,7 @@ public class VibeServiceImpl implements VibeService {
     private final ConnectionDao connectionDao;
     private final SafetyService safetyService;
     private final UserLimitService userLimitService;
+    private final GenderCompatibilityUtil genderCompatibilityUtil;
 
     @Override
     @Transactional
@@ -220,7 +222,7 @@ public class VibeServiceImpl implements VibeService {
             if (blockedIds.contains(candidate.getId())) {
                 continue;
             }
-            if (!isVisibleGenderForVibe(currentUser, candidate)) {
+            if (!genderCompatibilityUtil.isDiscoverable(currentUser, candidate)) {
                 continue;
             }
             if (hasExistingConnection(userId, candidate.getId())) {
@@ -432,7 +434,7 @@ public class VibeServiceImpl implements VibeService {
     private int calculateCompatibility(UserDto currentUser, PreferencesDto currentPreference, VibeCandidateRowDto candidate, VibeEntity vibe) {
         int score = 20;
         score += distanceScore(candidate.getDistanceKm(), Math.min(MAX_RADIUS_KM, Math.max(1, candidate.getRadiusKm())));
-        score += isMutualGenderFit(currentUser, candidate.getUser()) ? 20 : 0;
+        score += genderCompatibilityUtil.isDiscoverable(currentUser, candidate.getUser()) ? 20 : 0;
         PreferencesDto targetPreference = candidate.getPreference();
         score += same(currentPreference.getLifestyle(), targetPreference.getLifestyle()) ? 10 : 0;
         score += same(currentPreference.getPersonality(), targetPreference.getPersonality()) ? 10 : 0;
@@ -517,21 +519,6 @@ public class VibeServiceImpl implements VibeService {
         connectionDao.save(connection);
     }
 
-    private boolean isMutualGenderFit(UserDto a, UserDto b) { return isInterestedIn(a, b) && isInterestedIn(b, a); }
-    private boolean isVisibleGenderForVibe(UserDto viewer, UserDto candidate) {
-        if (viewer.getGender() == null || candidate.getGender() == null) return true;
-        if (viewer.getGender() == Gender.MALE) return candidate.getGender() == Gender.FEMALE;
-        if (viewer.getGender() == Gender.FEMALE) return candidate.getGender() == Gender.MALE;
-        return true;
-    }
-    private boolean isInterestedIn(UserDto viewer, UserDto candidate) {
-        if (viewer.getSexualOrientation() == null || viewer.getGender() == null || candidate.getGender() == null) return true;
-        Orientation orientation = viewer.getSexualOrientation();
-        if (orientation == Orientation.GAY) return viewer.getGender() == candidate.getGender();
-        if (orientation == Orientation.LESBIAN) return candidate.getGender() == Gender.FEMALE;
-        if (orientation == Orientation.STRAIGHT) return viewer.getGender() != candidate.getGender();
-        return true;
-    }
     private int normalizeRadius(UserDto user, Integer requestedRadius) {
         int radius = requestedRadius == null ? MAX_RADIUS_KM : requestedRadius;
         radius = Math.min(MAX_RADIUS_KM, Math.max(0, radius));

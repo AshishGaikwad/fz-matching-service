@@ -9,4 +9,7 @@ public class NotificationDto {
     private long toUserId;
     private String notificationTitle;
     private String notificationMessage;
+    private Long fromUserId;
+    private String senderName;
+    private String senderProfileImage;
 }

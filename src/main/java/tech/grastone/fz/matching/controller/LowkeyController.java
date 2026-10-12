@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
@@ -98,6 +99,16 @@ public class LowkeyController {
                 authentication == null ? null : authentication.getName(), request);
         return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Lowkey request sent",
                 lowkeyService.sendRequest(userId, request)));
+    }
+
+    @PostMapping("/profile/{candidateUserId}/view")
+    public ResponseEntity<SuccessResponseHandler<Void>> markProfileViewed(
+            Authentication authentication,
+            @PathVariable Long candidateUserId) {
+        Long userId = authenticatedUserId(authentication);
+        log.info("[Lowkey] POST /profile/{}/view viewerId={}", candidateUserId, userId);
+        lowkeyService.markProfileViewed(userId, candidateUserId);
+        return ResponseEntity.ok(new SuccessResponseHandler<>(200, "Lowkey profile view recorded", null));
     }
 
     private Long authenticatedUserId(Authentication authentication) {

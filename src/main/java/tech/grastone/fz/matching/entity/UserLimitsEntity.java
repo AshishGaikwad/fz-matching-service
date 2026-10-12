@@ -21,8 +21,8 @@ import tech.grastone.fz.matching.enums.LimitType;
 @Setter
 @Entity
 @Table(name = "user_limits", indexes = { @Index(name = "idx_user_id_1", columnList = "userId"),
-		@Index(name = "idx_user_limit", columnList = "userId,frequency,limitType,") }, uniqueConstraints = {
-				@UniqueConstraint(columnNames = "userId,frequency,limitType,preriodKey") })
+		@Index(name = "idx_user_limit", columnList = "userId,frequency,limitType,periodKey") }, uniqueConstraints = {
+				@UniqueConstraint(columnNames = { "userId", "frequency", "limitType", "periodKey" }) })
 public class UserLimitsEntity {
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)

@@ -1,7 +1,9 @@
 package tech.grastone.fz.matching.dao.impl;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,14 +49,17 @@ public class ConnectionDaoImpl implements ConnectionDao {
 			throw new ValidationException("Both user IDs are required to fetch connections.");
 		}
 
-		// Normalize order to ensure consistency (userId1 < userId2)
 		Long normalizedUserId1 = Math.min(userId1, userId2);
 		Long normalizedUserId2 = Math.max(userId1, userId2);
 
 		log.info("Fetching connection between user {} and user {}", normalizedUserId1, normalizedUserId2);
 
-		List<ConnectionsEntity> connections = connectionRepository.findByUserId1AndUserId2(normalizedUserId1,
-				normalizedUserId2);
+		Map<Long, ConnectionsEntity> connectionsById = new LinkedHashMap<>();
+		connectionRepository.findByUserId1AndUserId2(normalizedUserId1, normalizedUserId2)
+				.forEach(connection -> connectionsById.put(connection.getId(), connection));
+		connectionRepository.findByUserId1AndUserId2(normalizedUserId2, normalizedUserId1)
+				.forEach(connection -> connectionsById.put(connection.getId(), connection));
+		List<ConnectionsEntity> connections = List.copyOf(connectionsById.values());
 
 		log.info("Found {} connection(s) between user {} and user {}", connections.size(), normalizedUserId1,
 				normalizedUserId2);

@@ -25,9 +25,11 @@ import tech.grastone.fz.matching.service.MatchingService;
 import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.UserLimitService;
+import tech.grastone.fz.matching.service.UserRelationshipService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 import tech.grastone.fz.matching.util.CommonUtil;
+import tech.grastone.fz.matching.util.GenderCompatibilityUtil;
 
 @Service
 @AllArgsConstructor
@@ -45,6 +47,8 @@ public class MatchingServiceImpl implements MatchingService {
 	private final ConnectionDao connectionDao;
 	private final SafetyService safetyService;
 	private final UserLimitService userLimitService;
+	private final GenderCompatibilityUtil genderCompatibilityUtil;
+	private final UserRelationshipService userRelationshipService;
 
 	@Override
 	public List<ShowProfileDto> getMatches(long userId, Pageable pageable) {
@@ -77,6 +81,11 @@ public class MatchingServiceImpl implements MatchingService {
 					if (blockedDuringGeneration.contains(dto.getUser_id())) {
 						continue;
 					}
+					UserDto candidate = getUserDetails(dto.getUser_id());
+					if (!genderCompatibilityUtil.isDiscoverable(userDto, candidate)) {
+						log.warn("Skipping incompatible generated match userId={} candidateId={}", userId, dto.getUser_id());
+						continue;
+					}
 					log.debug("Creating match entry for userId {} and matchedUserId {}", userId, dto.getUser_id());
 					newMatches.add(createUserMatch(userId, dto.getUser_id()));
 				}
@@ -101,10 +110,18 @@ public class MatchingServiceImpl implements MatchingService {
 				if (blockedIds.contains(content.getUserId2())) {
 					return;
 				}
+				if (hasActiveAcceptedConnection(userId, content.getUserId2())) {
+					log.info("Skipping already connected match userId={} candidateId={}", userId, content.getUserId2());
+					return;
+				}
 				log.debug("Processing match: {}", content);
 
 				UserDto matchedUser = getUserDetails(content.getUserId2());
 				log.debug("Fetched matched user details: {}", matchedUser);
+				if (!genderCompatibilityUtil.isDiscoverable(userDto, matchedUser)) {
+					log.warn("Skipping incompatible cached match userId={} candidateId={}", userId, content.getUserId2());
+					return;
+				}
 
 				PreferencesDto preferences = preferencesService.get((int) content.getUserId2());
 				log.debug("Fetched preferences for matched userId {}: {}", content.getUserId2(), preferences);
@@ -150,8 +167,8 @@ public class MatchingServiceImpl implements MatchingService {
 		profile.setUser(matchedUser);
 		profile.setPreference(preferences);
 
-		if (isFreeUser(me) && match.getMatchStatus() == MatchStatus.PENDING) {
-			profile.setUserLimits(incrementUserLimit(userId));
+		if (match.getMatchStatus() == MatchStatus.PENDING) {
+			profile.setLimitStatus(userLimitService.consume(userId, me, LimitType.VIBE_PROFILE_ACTION));
 		}
 
 		match.setMatchStatus(MatchStatus.VIEWED);
@@ -200,11 +217,9 @@ public class MatchingServiceImpl implements MatchingService {
 			throw new ValidationException("Request is already pending.");
 		}
 
-
-        UserDto r = getUserDetails(receiverId);
-
         UserDto s = getUserDetails(senderId);
-        messagingFeingClient.sendNotification(NotificationDto.builder()
+		userLimitService.consume(senderId, s, LimitType.VIBE_PROFILE_ACTION);
+        sendNotificationSafe(NotificationDto.builder()
                 .toUserId(receiverId)
                 .notificationTitle("You have a new connection request")
                 .notificationMessage(s.getFullName() + " sent you a request.")
@@ -226,6 +241,19 @@ public class MatchingServiceImpl implements MatchingService {
 	public MatchRequestEntity replyRequest(ReplyMatchRequestDto dto) {
 		if (dto == null || dto.getId() == null) {
 			throw new ValidationException("Match request ID must be provided");
+		}
+
+		if (dto.getId() < 0) {
+			UserRelationshipEntity relationship = userRelationshipService.replyRequest(
+					Math.abs(dto.getId()),
+					dto.getRequestStatus() == RequestStatus.ACCEPT,
+					dto.getReplyMessage(),
+					UserInteractionSource.LOWKEY);
+			MatchRequestEntity response = toLegacyMatchRequest(relationship);
+			if (dto.getRequestStatus() == RequestStatus.ACCEPT) {
+				sendMatchedNotifications(response.getSenderId(), response.getReceiverId());
+			}
+			return response;
 		}
 
 		MatchRequestEntity req = matchRequestDao.get(dto.getId())
@@ -284,6 +312,24 @@ public class MatchingServiceImpl implements MatchingService {
 			});
 		}
 
+		List<UserRelationshipEntity> relationships = userRelationshipService.getPendingSentRequests(userId);
+		Set<Long> relationshipBlockedIds = safetyService.blockedUserIds(userId,
+				relationships.stream().map(UserRelationshipEntity::getTargetUserId).toList());
+		relationships.forEach(relationship -> {
+			Long receiverId = relationship.getTargetUserId();
+			if (receiverId == null || relationshipBlockedIds.contains(receiverId)) {
+				return;
+			}
+			List<UserImageEntity> userImagesList = getUserImages(receiverId);
+			UserDto matchedUser = getUserDetails(receiverId);
+			ShowProfileDto profile = new ShowProfileDto();
+			profile.setUser(matchedUser);
+			profile.setMatchRequests(toLegacyMatchRequest(relationship));
+			profile.setId(UUID.randomUUID().toString());
+			profile.setUserImages(userImagesList);
+			profiles.add(profile);
+		});
+
 
 
 		return profiles;
@@ -332,6 +378,30 @@ public class MatchingServiceImpl implements MatchingService {
 			});
 		}
 
+		List<UserRelationshipEntity> relationships = userRelationshipService.getPendingReceivedRequests(userId);
+		Set<Long> relationshipBlockedIds = safetyService.blockedUserIds(userId,
+				relationships.stream().map(UserRelationshipEntity::getInitiatedBy).toList());
+		relationships.forEach(relationship -> {
+			Long senderId = relationship.getInitiatedBy();
+			if (senderId == null || relationshipBlockedIds.contains(senderId)) {
+				return;
+			}
+			ShowProfileDto profile = new ShowProfileDto();
+			profile.setMatchRequests(toLegacyMatchRequest(relationship));
+			profile.setId(UUID.randomUUID().toString());
+			profile.setLimitStatus(seenYouLimit);
+			if (seenYouLimit.isPremium() || profiles.size() < seenYouLimit.getLimitValue()) {
+				List<UserImageEntity> userImagesList = getUserImages(senderId);
+				UserDto matchedUser = getUserDetails(senderId);
+				profile.setUser(matchedUser);
+				profile.setUserImages(userImagesList);
+				profile.setHidden(false);
+			} else {
+				profile.setHidden(true);
+			}
+			profiles.add(profile);
+		});
+
 		return profiles;
 	}
 
@@ -357,6 +427,11 @@ public class MatchingServiceImpl implements MatchingService {
 		if (!connectionDao.getConnectionByUserId1AndUserId2(u1, u2).isEmpty()) {
 			throw new ValidationException("Connection already exists");
 		}
+	}
+
+	private boolean hasActiveAcceptedConnection(Long userId, Long candidateId) {
+		return connectionDao.getConnectionByUserId1AndUserId2(userId, candidateId).stream()
+				.anyMatch(connection -> connection.isActive() && connection.getStatus() == ConnectionStatus.ACCEPTED);
 	}
 
 	private void prepareMatchRequestEntityForCreation(MatchRequestEntity entity) {
@@ -385,15 +460,58 @@ public class MatchingServiceImpl implements MatchingService {
 		try {
 
             UserDto r = getUserDetails(receiver);
-			messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(sender).notificationTitle("You have been matched").notificationMessage("Whooyaa! You have been matched with " + r.getFullName()).build());
+			sendNotificationSafe(NotificationDto.builder().toUserId(sender).notificationTitle("You have been matched").notificationMessage("Whooyaa! You have been matched with " + r.getFullName()).build());
 
 			UserDto s = getUserDetails(sender);
-			messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(receiver).notificationTitle("You have been matched").notificationMessage("Whooyaa! You have been matched with "+s.getFullName()).build());
+			sendNotificationSafe(NotificationDto.builder().toUserId(receiver).notificationTitle("You have been matched").notificationMessage("Whooyaa! You have been matched with "+s.getFullName()).build());
 
 		} catch (Exception e) {
 			log.error("failed to send notification");
 		}
 		log.info("Connection saved between {} and {}", sender, receiver);
+	}
+
+	private MatchRequestEntity toLegacyMatchRequest(UserRelationshipEntity relationship) {
+		MatchRequestEntity response = new MatchRequestEntity();
+		response.setMatchRequestId(-relationship.getId());
+		response.setSenderId(relationship.getInitiatedBy());
+		response.setReceiverId(relationship.getTargetUserId());
+		response.setRequestMessage(relationship.getRequestMessage());
+		response.setReplyMessage(relationship.getReplyMessage());
+		response.setRequestStatus(toLegacyRequestStatus(relationship.getStatus()));
+		response.setCreatedAt(relationship.getCreatedAt());
+		response.setUpdatedAt(relationship.getUpdatedAt());
+		return response;
+	}
+
+	private RequestStatus toLegacyRequestStatus(RelationshipStatus status) {
+		if (status == RelationshipStatus.CONNECTED) {
+			return RequestStatus.ACCEPT;
+		}
+		if (status == RelationshipStatus.REQUEST_REJECTED) {
+			return RequestStatus.REJECT;
+		}
+		return RequestStatus.PENDING;
+	}
+
+	private void sendMatchedNotifications(Long sender, Long receiver) {
+		try {
+			UserDto receiverUser = getUserDetails(receiver);
+			sendNotificationSafe(NotificationDto.builder()
+					.toUserId(sender)
+					.notificationTitle("You have been matched")
+					.notificationMessage("Whooyaa! You have been matched with " + receiverUser.getFullName())
+					.build());
+
+			UserDto senderUser = getUserDetails(sender);
+			sendNotificationSafe(NotificationDto.builder()
+					.toUserId(receiver)
+					.notificationTitle("You have been matched")
+					.notificationMessage("Whooyaa! You have been matched with " + senderUser.getFullName())
+					.build());
+		} catch (Exception e) {
+			log.warn("failed to send relationship-backed match notification");
+		}
 	}
 
 	private UserMatchesEntity createUserMatch(long userId, long matchedUserId) {
@@ -443,6 +561,15 @@ public class MatchingServiceImpl implements MatchingService {
 	private boolean isFreeUser(UserDto user) {
 		return user.getSubscriptionPlan() == SubscriptionPlan.FREE || user.getPlanExpiryDate() == null
 				|| user.getPlanExpiryDate().isBefore(LocalDate.now());
+	}
+
+	private void sendNotificationSafe(NotificationDto notificationDto) {
+		try {
+			messagingFeingClient.sendNotification(notificationDto);
+		} catch (Exception e) {
+			log.warn("Notification delivery failed or queued unavailable for userId={}",
+					notificationDto == null ? null : notificationDto.getToUserId());
+		}
 	}
 
 	private UserDto getUserDetails(long userId) {

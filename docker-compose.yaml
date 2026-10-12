@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fz-matching-service
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
+      SERVER_PORT: ${SERVER_PORT:-9091}
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://fz-eureka-server:7070/eureka/}
+    ports:
+      - "${HOST_PORT:-9091}:${SERVER_PORT:-9091}"
+    restart: unless-stopped

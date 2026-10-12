@@ -30,6 +30,17 @@ public class QueryUtil {
                  JOIN users u ON pw.user_id = u.id
                  WHERE
                      (
+                         :targetGender IS NULL
+                         OR UPPER(CAST(u.gender AS CHAR)) = :targetGender
+                         OR CAST(u.gender AS CHAR) =
+                            CASE :targetGender
+                                WHEN 'MALE' THEN '0'
+                                WHEN 'FEMALE' THEN '1'
+                                WHEN 'OTHER' THEN '2'
+                            END
+                     )
+                     AND
+                     (
                          pw.drinking = :drinking OR
                          pw.lifestyle = :lifestyle OR
                          pw.religion = :religion OR
@@ -60,8 +71,12 @@ public class QueryUtil {
                      AND NOT EXISTS (
                          SELECT 1
                          FROM connections c
-                         WHERE c.user_id1 = LEAST(:currentUserId, u.id)
-                           AND c.user_id2 = GREATEST(:currentUserId, u.id)
+                         WHERE (
+                             (c.user_id1 = :currentUserId AND c.user_id2 = u.id)
+                             OR (c.user_id1 = u.id AND c.user_id2 = :currentUserId)
+                         )
+                         AND c.is_active = 1
+                         AND c.status = 'ACCEPTED'
                      )
                  
                      AND (

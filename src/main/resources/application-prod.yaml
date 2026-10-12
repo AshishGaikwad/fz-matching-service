@@ -2,8 +2,8 @@ spring :
   application :
     name : fz-matching-service
   datasource:
-    url : jdbc:mysql://frenzo-db.c54uq4skmoai.ap-south-1.rds.amazonaws.com:3306/frenzo_prod
-    username : root
+    url : jdbc:mysql://frrenzo.com:32779/frenzo_prod
+    username : frenzo_prod
     password : Namrata1998$
     driver-class-name : com.mysql.cj.jdbc.Driver
   jpa :
@@ -19,7 +19,7 @@ eureka :
     fetch-registry: true
     registerWithEureka: true
     serviceUrl:
-      defaultZone: http://172.31.33.6:7070/eureka/
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://frrenzo.com:7070/eureka/}
   instance:
     preferIpAddress : true
 

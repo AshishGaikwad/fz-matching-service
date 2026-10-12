@@ -41,6 +41,19 @@ public interface LowkeySessionRepository extends JpaRepository<LowkeySessionEnti
                and s.userId <> :userId
                and s.latitude between :minLat and :maxLat
                and s.longitude between :minLon and :maxLon
+               and not exists (
+                   select 1
+                     from UserRelationshipEntity r
+                    where (
+                              (r.userId1 = :userId and r.userId2 = s.userId)
+                           or (r.userId1 = s.userId and r.userId2 = :userId)
+                          )
+                      and r.status in (
+                              tech.grastone.fz.matching.enums.RelationshipStatus.REQUEST_PENDING,
+                              tech.grastone.fz.matching.enums.RelationshipStatus.CONNECTED,
+                              tech.grastone.fz.matching.enums.RelationshipStatus.BLOCKED
+                          )
+               )
              order by s.createdAt desc
             """)
     List<LowkeySessionEntity> findNearbyCandidates(

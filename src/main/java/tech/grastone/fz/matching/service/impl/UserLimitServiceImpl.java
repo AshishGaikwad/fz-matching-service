@@ -23,7 +23,8 @@ import tech.grastone.fz.matching.util.CommonUtil;
 public class UserLimitServiceImpl implements UserLimitService {
 
     private static final int FREE_PROFILE_ACTION_BASE_LIMIT = 20;
-    private static final int FREE_PROFILE_ACTION_MAX_LIMIT = 60;
+    private static final int FREE_PROFILE_ACTION_MAX_LIMIT = 50;
+    private static final int FREE_PROFILE_ACTION_REWARD_INCREMENT = 10;
     private static final int FREE_PROFILE_ACTION_MAX_REWARDS = 3;
     private static final int FREE_VIBE_JOIN_BASE_LIMIT = 1;
     private static final int FREE_VIBE_JOIN_MAX_LIMIT = 3;
@@ -79,6 +80,9 @@ public class UserLimitServiceImpl implements UserLimitService {
         }
         UserLimitsEntity usage = getOrCreate(userId, limitType, false);
         UserLimitsEntity rewards = getOrCreate(userId, rewardLimitType(limitType), true);
+        if (usage.getUsageCount() < usage.getLimitValue()) {
+            throw new DataLimitException("Use current daily limit before rewarded unlock");
+        }
         int maxRewards = maxRewardCount(limitType);
         if (rewards.getUsageCount() >= maxRewards) {
             throw new DataLimitException("Rewarded ad limit reached for today");
@@ -94,7 +98,7 @@ public class UserLimitServiceImpl implements UserLimitService {
         String periodKey = commonUtil.getPeriod(Frequency.DAILY);
         UserLimitsEntity limits = limitsDao.getUserLimits(userId, Frequency.DAILY, limitType, periodKey);
         if (limits != null) {
-            return limits;
+            return normalizeLimit(limits, limitType, rewardCounter);
         }
         limits = new UserLimitsEntity();
         limits.setUserId(userId);
@@ -104,6 +108,31 @@ public class UserLimitServiceImpl implements UserLimitService {
         limits.setUsageCount(0);
         limits.setLimitValue(rewardCounter ? maxRewardCount(originalLimitType(limitType)) : baseLimit(limitType));
         return limitsDao.save(limits);
+    }
+
+    private UserLimitsEntity normalizeLimit(UserLimitsEntity limits, LimitType limitType, boolean rewardCounter) {
+        if (rewardCounter) {
+            int maxRewards = maxRewardCount(originalLimitType(limitType));
+            if (limits.getLimitValue() != maxRewards) {
+                limits.setLimitValue(maxRewards);
+                return limitsDao.save(limits);
+            }
+            return limits;
+        }
+
+        int expectedLimit = limitValueForRewardCount(limitType,
+                Math.min(maxRewardCount(limitType), rewardsUsed(limits.getUserId(), limitType)));
+        if (limits.getLimitValue() != expectedLimit) {
+            limits.setLimitValue(expectedLimit);
+            return limitsDao.save(limits);
+        }
+        return limits;
+    }
+
+    private int rewardsUsed(long userId, LimitType limitType) {
+        String periodKey = commonUtil.getPeriod(Frequency.DAILY);
+        UserLimitsEntity rewards = limitsDao.getUserLimits(userId, Frequency.DAILY, rewardLimitType(limitType), periodKey);
+        return rewards == null ? 0 : rewards.getUsageCount();
     }
 
     private UserLimitStatusDto toStatus(LimitType limitType, UserLimitsEntity usage, UserLimitsEntity rewards, boolean premium) {
@@ -151,7 +180,7 @@ public class UserLimitServiceImpl implements UserLimitService {
     private int limitValueForRewardCount(LimitType limitType, int rewardCount) {
         return switch (limitType) {
             case VIBE_PROFILE_ACTION -> Math.min(FREE_PROFILE_ACTION_MAX_LIMIT,
-                    FREE_PROFILE_ACTION_BASE_LIMIT + (int) Math.ceil((FREE_PROFILE_ACTION_MAX_LIMIT - FREE_PROFILE_ACTION_BASE_LIMIT) * (rewardCount / 3.0)));
+                    FREE_PROFILE_ACTION_BASE_LIMIT + (FREE_PROFILE_ACTION_REWARD_INCREMENT * rewardCount));
             case VIBE_JOIN -> Math.min(FREE_VIBE_JOIN_MAX_LIMIT, FREE_VIBE_JOIN_BASE_LIMIT + rewardCount);
             case SEEN_YOU_VIEW -> Math.min(FREE_SEEN_YOU_MAX_LIMIT, FREE_SEEN_YOU_BASE_LIMIT + rewardCount);
             default -> throw new ValidationException("Unsupported limit type");

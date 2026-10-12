@@ -1,6 +1,5 @@
 package tech.grastone.fz.matching.service.impl;
 
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -27,7 +26,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import tech.grastone.fz.matching.dao.ConnectionDao;
 import tech.grastone.fz.matching.dto.LowkeyCompatibilityResultDto;
 import tech.grastone.fz.matching.dto.LowkeyDiscoverDto;
 import tech.grastone.fz.matching.dto.LowkeyEnterRequestDto;
@@ -37,34 +35,36 @@ import tech.grastone.fz.matching.dto.LowkeyRequestDto;
 import tech.grastone.fz.matching.dto.LowkeySessionDto;
 import tech.grastone.fz.matching.dto.NotificationDto;
 import tech.grastone.fz.matching.dto.PreferencesDto;
-import tech.grastone.fz.matching.dto.SendMatchRequestDto;
 import tech.grastone.fz.matching.dto.UserDto;
 import tech.grastone.fz.matching.entity.LowkeyDiscoveryHistoryEntity;
 import tech.grastone.fz.matching.entity.LowkeySessionEntity;
 import tech.grastone.fz.matching.entity.MatchRequestEntity;
 import tech.grastone.fz.matching.entity.MatchScoreCacheEntity;
+import tech.grastone.fz.matching.entity.UserRelationshipEntity;
 import tech.grastone.fz.matching.entity.UserImageEntity;
 import tech.grastone.fz.matching.entity.UserLocationEntity;
 import tech.grastone.fz.matching.enums.LowkeySessionStatus;
 import tech.grastone.fz.matching.enums.LimitType;
 import tech.grastone.fz.matching.enums.LookingFor;
+import tech.grastone.fz.matching.enums.RelationshipStatus;
 import tech.grastone.fz.matching.enums.RequestStatus;
 import tech.grastone.fz.matching.enums.SubscriptionPlan;
+import tech.grastone.fz.matching.enums.UserInteractionSource;
 import tech.grastone.fz.matching.exception.DataNotFoundException;
 import tech.grastone.fz.matching.exception.ValidationException;
 import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.repository.LowkeyDiscoveryHistoryRepository;
 import tech.grastone.fz.matching.repository.LowkeySessionRepository;
-import tech.grastone.fz.matching.repository.MatchRequestRepository;
 import tech.grastone.fz.matching.repository.MatchScoreCacheRepository;
 import tech.grastone.fz.matching.repository.UserLocationRepository;
 import tech.grastone.fz.matching.service.LowkeyService;
-import tech.grastone.fz.matching.service.MatchingService;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.SafetyService;
 import tech.grastone.fz.matching.service.UserLimitService;
+import tech.grastone.fz.matching.service.UserRelationshipService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
+import tech.grastone.fz.matching.util.GenderCompatibilityUtil;
 
 @Service
 @AllArgsConstructor
@@ -82,26 +82,22 @@ public class LowkeyServiceImpl implements LowkeyService {
     private final UserLocationRepository userLocationRepository;
     private final LowkeyDiscoveryHistoryRepository discoveryHistoryRepository;
     private final MatchScoreCacheRepository matchScoreCacheRepository;
-    private final MatchRequestRepository matchRequestRepository;
     private final UserFeingClient userFeingClient;
     private final MessagingFeingClient messagingFeingClient;
     private final PreferencesService preferencesService;
-    private final MatchingService matchingService;
-    private final ConnectionDao connectionDao;
     private final SafetyService safetyService;
     private final LowkeyCompatibilityEngine compatibilityEngine;
     private final ObjectMapper objectMapper;
     private final UserLimitService userLimitService;
+    private final UserRelationshipService userRelationshipService;
+    private final GenderCompatibilityUtil genderCompatibilityUtil;
 
     @Override
     @Transactional
     public LowkeySessionDto getMySession(Long userId) {
         expireOldSessions();
-        return lowkeySessionRepository
-                .findFirstByUserIdAndStatusOrderByCreatedAtDesc(
-                        userId, LowkeySessionStatus.ACTIVE)
-                .map(this::toSessionDto)
-                .orElse(null);
+        UserDto user = getUserDetails(userId);
+        return toSessionDto(ensureLowkeySettings(userId, user, null, LocalDateTime.now()));
     }
 
     @Override
@@ -122,9 +118,7 @@ public class LowkeyServiceImpl implements LowkeyService {
                 user.getLookingFor()
         );
 
-        leaveActiveSessions(userId, null, now);
-
-        LowkeySessionEntity session = new LowkeySessionEntity();
+        LowkeySessionEntity session = lowkeySessionRepository.findById(userId).orElseGet(LowkeySessionEntity::new);
         session.setUserId(userId);
         session.setStatus(LowkeySessionStatus.ACTIVE);
         session.setLatitude(latitude);
@@ -133,10 +127,13 @@ public class LowkeyServiceImpl implements LowkeyService {
         session.setRadiusKm(radiusKm);
         session.setDurationMinutes(durationMinutes);
         session.setLookingForValues(serializeLookingFor(lookingFor));
-        session.setCreatedAt(now);
+        if (session.getCreatedAt() == null) {
+            session.setCreatedAt(now);
+            session.setCreatedBy(String.valueOf(userId));
+        }
         session.setLastSeenAt(now);
         session.setExpiresAt(now.plusYears(100));
-        session.setCreatedBy(String.valueOf(userId));
+        session.setUpdatedBy(String.valueOf(userId));
 
         LowkeySessionEntity saved = lowkeySessionRepository.save(session);
         upsertUserLocation(userId, latitude, longitude, saved.getLocationAccuracyMeters(), now);
@@ -156,7 +153,8 @@ public class LowkeyServiceImpl implements LowkeyService {
             throw new ValidationException("Location update is required");
         }
 
-        LowkeySessionEntity session = resolveActiveSession(userId, request.getSessionId());
+        UserDto user = getUserDetails(userId);
+        LowkeySessionEntity session = ensureLowkeySettings(userId, user, request.getSessionId(), LocalDateTime.now());
         double latitude = firstNonNull(request.getLatitude(), session.getLatitude());
         double longitude = firstNonNull(request.getLongitude(), session.getLongitude());
         validateCoordinates(latitude, longitude);
@@ -208,9 +206,8 @@ public class LowkeyServiceImpl implements LowkeyService {
     public List<LowkeyDiscoverDto> discover(Long userId, Pageable pageable) {
         expireOldSessions();
         LocalDateTime now = LocalDateTime.now();
-        LowkeySessionEntity me = resolveActiveSession(userId, null);
-
         UserDto currentUser = getUserDetails(userId);
+        LowkeySessionEntity me = ensureLowkeySettings(userId, currentUser, null, now);
         PreferencesDto currentPreference = safeGetPreference(userId);
         BoundingBox box = boundingBox(me.getLatitude(), me.getLongitude(), me.getRadiusKm());
         Pageable candidatePage = PageRequest.of(
@@ -247,14 +244,14 @@ public class LowkeyServiceImpl implements LowkeyService {
             if (distanceKm > me.getRadiusKm() || distanceKm > Math.max(1, candidateSession.getRadiusKm())) {
                 continue;
             }
-            if (hasExistingConnection(userId, candidateSession.getUserId())) {
-                continue;
-            }
-            if (hasPendingRequest(userId, candidateSession.getUserId())) {
+            if (userRelationshipService.hasBlockingState(userId, candidateSession.getUserId())) {
                 continue;
             }
 
             UserDto candidate = getUserDetails(candidateSession.getUserId());
+            if (!genderCompatibilityUtil.isDiscoverable(currentUser, candidate)) {
+                continue;
+            }
             PreferencesDto candidatePreference = safeGetPreference(candidateSession.getUserId());
             LowkeyDiscoveryHistoryEntity history = historyByCandidate.get(candidateSession.getUserId());
             LowkeyCompatibilityResultDto compatibility = compatibilityEngine.score(
@@ -285,7 +282,7 @@ public class LowkeyServiceImpl implements LowkeyService {
             dto.setFreshnessScore(compatibility.getFreshnessScore());
             dto.setBadges(buildBadges(candidate, compatibility, distanceKm));
             dto.setOnlineStatus(onlineStatus(candidateSession.getLastSeenAt()));
-            dto.setRequestStatus(resolveRequestStatus(userId, candidate.getId()));
+            dto.setRequestStatus(userRelationshipService.statusForViewer(userId, candidate.getId()));
             results.add(dto);
         }
 
@@ -314,44 +311,41 @@ public class LowkeyServiceImpl implements LowkeyService {
         if (request == null || request.getReceiverId() == null) {
             throw new ValidationException("Receiver ID is required");
         }
-        resolveActiveSession(userId, request.getSessionId());
+        ensureLowkeySettings(userId, getUserDetails(userId), request.getSessionId(), LocalDateTime.now());
         UserDto sender = getUserDetails(userId);
         userLimitService.consume(userId, sender, LimitType.VIBE_PROFILE_ACTION);
         safetyService.assertNotBlocked(userId, request.getReceiverId());
 
-        SendMatchRequestDto dto = new SendMatchRequestDto();
-        dto.setSenderId(userId);
-        dto.setReceiverId(request.getReceiverId());
-        dto.setRequestMessage(limit(request.getRequestMessage(), 100));
-        MatchRequestEntity saved = matchingService.sendRequest(dto);
-
-        sendNotificationSafe(
+        UserRelationshipEntity saved = userRelationshipService.sendRequest(
+                userId,
                 request.getReceiverId(),
-                "You have a new connection request",
-                safeName(sender) + " sent you a request."
+                limit(request.getRequestMessage(), 100),
+                UserInteractionSource.LOWKEY
         );
-        publishLowkeyEvent("REQUEST_SENT", null, userId, request.getReceiverId(), Map.of(
-                "requestId", saved.getMatchRequestId(),
-                "receiverId", request.getReceiverId()
-        ));
-        return saved;
+
+        if (saved.getStatus() == RelationshipStatus.CONNECTED) {
+            notifyConnectionCreated(userId, request.getReceiverId());
+        } else {
+            String senderName = firstNonBlank(safeNameOrNull(sender), request.getSenderName(), "Frenzo user");
+            sendNotificationSafe(
+                    request.getReceiverId(),
+                    "You have a new connection request",
+                    senderName + " sent you a request.",
+                    sender,
+                    senderName,
+                    request.getSenderProfileImage()
+            );
+        }
+        return toLegacyMatchRequest(saved, userId, request.getReceiverId());
     }
 
-    private LowkeySessionEntity resolveActiveSession(Long userId, Long sessionId) {
-        if (sessionId != null) {
-            LowkeySessionEntity session = lowkeySessionRepository.findById(sessionId)
-                    .orElseThrow(() -> new ValidationException("Lowkey session not found"));
-            if (!session.getUserId().equals(userId)
-                    || session.getStatus() != LowkeySessionStatus.ACTIVE) {
-                throw new ValidationException("Enter Lowkey before discovering people");
-            }
-            return session;
-        }
-
-        return lowkeySessionRepository
-                .findFirstByUserIdAndStatusOrderByCreatedAtDesc(
-                        userId, LowkeySessionStatus.ACTIVE)
-                .orElseThrow(() -> new ValidationException("Enter Lowkey before discovering people"));
+    @Override
+    @Transactional
+    public void markProfileViewed(Long userId, Long candidateUserId) {
+        safetyService.assertNotBlocked(userId, candidateUserId);
+        UserDto viewer = getUserDetails(userId);
+        userLimitService.consume(userId, viewer, LimitType.VIBE_PROFILE_ACTION);
+        userRelationshipService.recordProfileViewed(userId, candidateUserId, UserInteractionSource.LOWKEY, Map.of());
     }
 
     private List<LowkeySessionEntity> leaveActiveSessions(Long userId, Long sessionId, LocalDateTime now) {
@@ -471,22 +465,6 @@ public class LowkeyServiceImpl implements LowkeyService {
         return badges.stream().limit(4).toList();
     }
 
-    private String resolveRequestStatus(Long senderId, Long receiverId) {
-        Optional<MatchRequestEntity> request = matchRequestRepository.findBySenderIdAndReceiverId(senderId, receiverId)
-                .stream()
-                .findFirst();
-        if (request.isPresent()) {
-            return request.get().getRequestStatus().name();
-        }
-
-        return matchRequestRepository.findBySenderIdAndReceiverId(receiverId, senderId).stream()
-                .findFirst()
-                .map(entity -> entity.getRequestStatus() == RequestStatus.PENDING
-                        ? "RECEIVED"
-                        : entity.getRequestStatus().name())
-                .orElse(null);
-    }
-
     private void expireOldSessions() {
         // Lowkey is persistent until the user explicitly leaves.
         // We keep this hook so older callers remain safe, but it no longer auto-expires sessions.
@@ -529,26 +507,32 @@ public class LowkeyServiceImpl implements LowkeyService {
         }
     }
 
-    private boolean hasExistingConnection(Long userId, Long candidateId) {
-        Long userId1 = Math.min(userId, candidateId);
-        Long userId2 = Math.max(userId, candidateId);
-        return !connectionDao.getConnectionByUserId1AndUserId2(userId1, userId2).isEmpty();
-    }
-
-    private boolean hasPendingRequest(Long senderId, Long receiverId) {
-        return matchRequestRepository.findBySenderIdAndReceiverId(senderId, receiverId).stream()
-                .anyMatch(request -> request.getRequestStatus() == RequestStatus.PENDING)
-                || matchRequestRepository.findBySenderIdAndReceiverId(receiverId, senderId).stream()
-                .anyMatch(request -> request.getRequestStatus() == RequestStatus.PENDING);
-    }
-
     private void sendNotificationSafe(Long toUserId, String title, String message) {
+        sendNotificationSafe(toUserId, title, message, null, null, null);
+    }
+
+    private void sendNotificationSafe(Long toUserId, String title, String message, UserDto fromUser) {
+        sendNotificationSafe(toUserId, title, message, fromUser, null, null);
+    }
+
+    private void sendNotificationSafe(Long toUserId, String title, String message, UserDto fromUser,
+            String senderNameOverride) {
+        sendNotificationSafe(toUserId, title, message, fromUser, senderNameOverride, null);
+    }
+
+    private void sendNotificationSafe(Long toUserId, String title, String message, UserDto fromUser,
+            String senderNameOverride, String senderProfileImageOverride) {
         try {
-            messagingFeingClient.sendNotification(NotificationDto.builder()
+            NotificationDto.NotificationDtoBuilder builder = NotificationDto.builder()
                     .toUserId(toUserId)
                     .notificationTitle(title)
-                    .notificationMessage(message)
-                    .build());
+                    .notificationMessage(message);
+            if (fromUser != null) {
+                builder.fromUserId(fromUser.getId());
+                builder.senderName(firstNonBlank(senderNameOverride, safeNameOrNull(fromUser), "Frenzo user"));
+                builder.senderProfileImage(firstNonBlank(senderProfileImageOverride, fromUser.getProfilePicUrl(), null));
+            }
+            messagingFeingClient.sendNotification(builder.build());
         } catch (Exception e) {
             log.warn("Unable to send Lowkey notification to {}", toUserId);
         }
@@ -561,6 +545,65 @@ public class LowkeyServiceImpl implements LowkeyService {
                 userId,
                 targetUserId,
                 payload == null ? List.of() : payload.keySet());
+    }
+
+    private LowkeySessionEntity ensureLowkeySettings(Long userId, UserDto user, Long sessionId, LocalDateTime now) {
+        if (sessionId != null && !sessionId.equals(userId)) {
+            throw new ValidationException("Lowkey settings not found");
+        }
+        LowkeySessionEntity settings = lowkeySessionRepository.findById(userId).orElseGet(LowkeySessionEntity::new);
+        if (settings.getUserId() == null) {
+            settings.setUserId(userId);
+            settings.setRadiusKm(DEFAULT_RADIUS_KM);
+            settings.setDurationMinutes(DEFAULT_DURATION_MINUTES);
+            settings.setLookingForValues(serializeLookingFor(user.getLookingFor()));
+            settings.setCreatedAt(now);
+            settings.setCreatedBy(String.valueOf(userId));
+        }
+        settings.setStatus(LowkeySessionStatus.ACTIVE);
+        if (!validCoordinates(settings.getLatitude(), settings.getLongitude())) {
+            settings.setLatitude(user.getLattitude());
+            settings.setLongitude(user.getLongitude());
+        }
+        validateCoordinates(settings.getLatitude(), settings.getLongitude());
+        settings.setLastSeenAt(now);
+        settings.setExpiresAt(now.plusYears(100));
+        settings.setUpdatedBy(String.valueOf(userId));
+        LowkeySessionEntity saved = lowkeySessionRepository.save(settings);
+        upsertUserLocation(userId, saved.getLatitude(), saved.getLongitude(), saved.getLocationAccuracyMeters(), now);
+        return saved;
+    }
+
+    private MatchRequestEntity toLegacyMatchRequest(UserRelationshipEntity relationship, Long senderId, Long receiverId) {
+        MatchRequestEntity response = new MatchRequestEntity();
+        response.setMatchRequestId(-relationship.getId());
+        response.setSenderId(relationship.getInitiatedBy() == null ? senderId : relationship.getInitiatedBy());
+        response.setReceiverId(relationship.getTargetUserId() == null ? receiverId : relationship.getTargetUserId());
+        response.setRequestMessage(relationship.getRequestMessage());
+        response.setReplyMessage(relationship.getReplyMessage());
+        response.setRequestStatus(toLegacyRequestStatus(relationship.getStatus()));
+        response.setCreatedAt(relationship.getCreatedAt());
+        response.setUpdatedAt(relationship.getUpdatedAt());
+        return response;
+    }
+
+    private RequestStatus toLegacyRequestStatus(RelationshipStatus status) {
+        if (status == RelationshipStatus.CONNECTED) {
+            return RequestStatus.ACCEPT;
+        }
+        if (status == RelationshipStatus.REQUEST_REJECTED) {
+            return RequestStatus.REJECT;
+        }
+        return RequestStatus.PENDING;
+    }
+
+    private void notifyConnectionCreated(Long actorUserId, Long otherUserId) {
+        UserDto actor = getUserDetails(actorUserId);
+        UserDto other = getUserDetails(otherUserId);
+        sendNotificationSafe(actorUserId, "You have been matched",
+                "Whooyaa! You have been matched with " + safeName(other), other);
+        sendNotificationSafe(otherUserId, "You have been matched",
+                "Whooyaa! You have been matched with " + safeName(actor), actor);
     }
 
     private int normalizeRadius(Integer requestedRadius) {
@@ -620,7 +663,27 @@ public class LowkeyServiceImpl implements LowkeyService {
     }
 
     private String safeName(UserDto user) {
-        return user.getFullName() == null ? "Frenzo user" : user.getFullName();
+        return firstNonBlank(safeNameOrNull(user), "Frenzo user");
+    }
+
+    private String safeNameOrNull(UserDto user) {
+        return user == null ? null : cleanName(user.getFullName());
+    }
+
+    private String cleanName(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private String toJson(Map<String, Integer> value) {
@@ -649,8 +712,10 @@ public class LowkeyServiceImpl implements LowkeyService {
         }
     }
 
-    private long secondsUntil(LocalDateTime endsAt) {
-        return Math.max(0, Duration.between(LocalDateTime.now(), endsAt).getSeconds());
+    private boolean validCoordinates(double latitude, double longitude) {
+        return Double.isFinite(latitude) && Double.isFinite(longitude)
+                && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180
+                && !(latitude == 0 && longitude == 0);
     }
 
     private BoundingBox boundingBox(double latitude, double longitude, int radiusKm) {

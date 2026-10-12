@@ -48,6 +48,7 @@ import tech.grastone.fz.matching.handler.SuccessResponseHandler;
 import tech.grastone.fz.matching.service.MatchingV2Service;
 import tech.grastone.fz.matching.service.PreferencesService;
 import tech.grastone.fz.matching.service.SafetyService;
+import tech.grastone.fz.matching.service.UserLimitService;
 import tech.grastone.fz.matching.service.client.MessagingFeingClient;
 import tech.grastone.fz.matching.service.client.UserFeingClient;
 import tech.grastone.fz.matching.util.CommonUtil;
@@ -67,6 +68,7 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 	private final MatchRequestDao matchRequestDao;
 	private final ConnectionDao connectionDao;
 	private final SafetyService safetyService;
+	private final UserLimitService userLimitService;
 
 	@Override
 	public List<ShowProfileDto> getMatches(long userId, Pageable pageable) {
@@ -79,7 +81,8 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 		List<UserMatchesEntity> matches = new ArrayList<>(matchPage.getContent());
 		Set<Long> blockedIds = safetyService.blockedUserIds(userId,
 				matches.stream().map(UserMatchesEntity::getUserId2).toList());
-		matches.removeIf(match -> blockedIds.contains(match.getUserId2()));
+		matches.removeIf(match -> blockedIds.contains(match.getUserId2())
+				|| hasActiveAcceptedConnection(userId, match.getUserId2()));
 		if (matches.isEmpty()) {
 			PreferencesDto preferencesDto = preferencesService.get((int) userId);
 			List<MatchedByPreferencesDto> matchedDtos = matchingDao.getMatchedUserUsingPreferences(
@@ -123,8 +126,8 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 		profile.setPreference(preferences);
 		profile.setUserImages(getUserImages(match.getUserId2()));
 
-		if (isFreeUser(me) && match.getMatchStatus() == MatchStatus.PENDING) {
-			profile.setUserLimits(incrementUserLimit(userId));
+		if (match.getMatchStatus() == MatchStatus.PENDING) {
+			profile.setLimitStatus(userLimitService.consume(userId, me, LimitType.VIBE_PROFILE_ACTION));
 		}
 
 		match.setMatchStatus(MatchStatus.VIEWED);
@@ -168,8 +171,9 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 
 		UserDto receiver = getUserDetails(receiverId);
 		UserDto sender = getUserDetails(senderId);
+		userLimitService.consume(senderId, sender, LimitType.VIBE_PROFILE_ACTION);
 		if (receiver.getSubscriptionPlan() == SubscriptionPlan.PREMIUM) {
-			messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(receiverId)
+			sendNotificationSafe(NotificationDto.builder().toUserId(receiverId)
 					.notificationTitle("You have new crush request!")
 					.notificationMessage("Hey ! " + sender.getFullName() + " has seen you and sent you a request.")
 					.build());
@@ -300,6 +304,11 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 		}
 	}
 
+	private boolean hasActiveAcceptedConnection(Long userId, Long candidateId) {
+		return connectionDao.getConnectionByUserId1AndUserId2(userId, candidateId).stream()
+				.anyMatch(connection -> connection.isActive() && connection.getStatus() == ConnectionStatus.ACCEPTED);
+	}
+
 	private void prepareMatchRequestEntityForCreation(MatchRequestEntity entity) {
 		entity.setRequestStatus(RequestStatus.PENDING);
 		entity.setCreatedAt(LocalDateTime.now());
@@ -324,13 +333,13 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 
 		try {
 			UserDto receiverUser = getUserDetails(receiver);
-			messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(sender)
+			sendNotificationSafe(NotificationDto.builder().toUserId(sender)
 					.notificationTitle("You have been matched")
 					.notificationMessage("Whooyaa! You have been matched with " + receiverUser.getFullName())
 					.build());
 
 			UserDto senderUser = getUserDetails(sender);
-			messagingFeingClient.sendNotification(NotificationDto.builder().toUserId(receiver)
+			sendNotificationSafe(NotificationDto.builder().toUserId(receiver)
 					.notificationTitle("You have been matched")
 					.notificationMessage("Whooyaa! You have been matched with " + senderUser.getFullName())
 					.build());
@@ -384,6 +393,15 @@ public class MatchingV2ServiceImpl implements MatchingV2Service {
 	private boolean isFreeUser(UserDto user) {
 		return user.getSubscriptionPlan() == SubscriptionPlan.FREE || user.getPlanExpiryDate() == null
 				|| user.getPlanExpiryDate().isBefore(LocalDate.now());
+	}
+
+	private void sendNotificationSafe(NotificationDto notificationDto) {
+		try {
+			messagingFeingClient.sendNotification(notificationDto);
+		} catch (Exception e) {
+			log.warn("Notification delivery failed or queued unavailable for userId={}",
+					notificationDto == null ? null : notificationDto.getToUserId());
+		}
 	}
 
 	private UserDto getUserDetails(long userId) {

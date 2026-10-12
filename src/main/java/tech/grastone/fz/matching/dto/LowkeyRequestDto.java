@@ -8,4 +8,6 @@ public class LowkeyRequestDto {
     private Long receiverId;
     private Long sessionId;
     private String requestMessage;
+    private String senderName;
+    private String senderProfileImage;
 }
